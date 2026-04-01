@@ -69,15 +69,24 @@ func g06UnusedIndexes(ctx context.Context, db *pgxpool.Pool) []Finding {
 		"https://www.postgresql.org/docs/current/indexes.html")}
 }
 
-// G06-002 duplicate indexes with same indexdef
+// G06-002 duplicate indexes — same table, same columns, same expression/predicate.
+// Uses pg_index.indkey (column attribute numbers) instead of indexdef so the
+// comparison is not confused by different index names in the definition string.
 func g06DuplicateIndexes(ctx context.Context, db *pgxpool.Pool) []Finding {
-	const q = `SELECT array_agg(indexname ORDER BY indexname) AS names,
-		schemaname, tablename, indexdef
-		FROM pg_indexes
-		WHERE schemaname NOT IN ('pg_catalog','information_schema')
-		GROUP BY schemaname, tablename, indexdef
+	// Use string_agg instead of array_agg so pgx can scan directly into string
+	const q = `SELECT string_agg(ci.relname, ', ' ORDER BY ci.relname) AS dup_indexes,
+		n.nspname AS schema_name,
+		ct.relname AS table_name
+		FROM pg_index ix
+		JOIN pg_class ct ON ct.oid = ix.indrelid
+		JOIN pg_class ci ON ci.oid = ix.indexrelid
+		JOIN pg_namespace n ON n.oid = ct.relnamespace
+		WHERE n.nspname NOT IN ('pg_catalog','information_schema','spock')
+		AND ix.indisvalid
+		GROUP BY n.nspname, ct.relname, ix.indkey::text,
+		         COALESCE(ix.indexprs::text,''), COALESCE(ix.indpred::text,'')
 		HAVING count(*) > 1
-		ORDER BY 1`
+		ORDER BY schema_name, table_name`
 	rows, err := db.Query(ctx, q)
 	if err != nil {
 		return []Finding{NewSkip("G06-002", g06, "Duplicate indexes", err.Error())}
@@ -85,9 +94,9 @@ func g06DuplicateIndexes(ctx context.Context, db *pgxpool.Pool) []Finding {
 	defer rows.Close()
 	var lines []string
 	for rows.Next() {
-		var names, schema, tbl, def string
-		_ = rows.Scan(&names, &schema, &tbl, &def)
-		lines = append(lines, fmt.Sprintf("%s.%s: %s — def: %s", schema, tbl, names, def))
+		var names, schema, tbl string
+		_ = rows.Scan(&names, &schema, &tbl)
+		lines = append(lines, fmt.Sprintf("%s.%s: [%s]", schema, tbl, names))
 	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G06-002", g06, "Duplicate indexes",

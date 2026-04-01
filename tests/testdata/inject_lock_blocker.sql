@@ -1,0 +1,24 @@
+-- ============================================================
+-- Lock blocker injection — requires TWO terminal sessions
+--
+-- Triggers: G04-003 (Lock blocker chains)
+--
+-- Terminal 1 — run this and leave it open:
+--   psql -h HOST -U USER -d DB
+--   BEGIN;
+--   LOCK TABLE _hc_test.bloat_source IN SHARE ROW EXCLUSIVE MODE;
+--   -- DO NOT COMMIT — leave the transaction open
+--
+-- Terminal 2 — run this immediately after:
+--   psql -h HOST -U USER -d DB
+--   BEGIN;
+--   LOCK TABLE _hc_test.bloat_source IN ACCESS EXCLUSIVE MODE;
+--   -- This will block, waiting for Terminal 1
+--
+-- Terminal 3 — while both are blocked, run the healthcheck:
+--   ./pg_healthcheck --host HOST --dbname DB --user USER --groups G04
+--
+-- Then close Terminal 2 (Ctrl+C), then Terminal 1 (ROLLBACK).
+-- ============================================================
+\echo 'See file comments — lock blocker injection requires two concurrent sessions.'
+\echo 'This file is documentation only.'
