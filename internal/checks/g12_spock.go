@@ -40,6 +40,8 @@ func (g *G12SpockCluster) RunCluster(ctx context.Context, nodes []*NodeConn, cfg
 		nf = append(nf, g12LocalNode(ctx, node.DB)...)
 		nf = append(nf, g12LagTracker(ctx, node.DB)...)
 		nf = append(nf, g12QueueDepth(ctx, node.DB)...)
+		nf = append(nf, g12ChannelStats(ctx, node.DB)...)
+		nf = append(nf, g12ReplicationProgress(ctx, node.DB)...)
 		all = append(all, tagNode(nf, node.Name)...)
 	}
 
@@ -140,75 +142,76 @@ func g12WorkerStatus(ctx context.Context, db *pgxpool.Pool) []Finding {
 }
 
 // G12-004 apply lag
-// Reads from spock.lag_tracker (pgEdge Spock), falling back to computing
-// lag from pg_replication_slots when lag_tracker is not available.
+// Uses spock.lag_tracker (pgEdge Spock). Correct columns confirmed:
+//   origin_name, receiver_name, replication_lag_bytes, replication_lag (interval)
 func g12ApplyLag(ctx context.Context, db *pgxpool.Pool) []Finding {
-	// Primary: spock.lag_tracker (pgEdge Spock)
-	if spockExists(ctx, db, "lag_tracker") {
-		const q = `SELECT receiver_name,
-		                   lag_bytes,
-		                   EXTRACT(EPOCH FROM lag_time)::bigint AS lag_secs
-		            FROM spock.lag_tracker
-		            ORDER BY lag_bytes DESC NULLS LAST`
-		rows, err := db.Query(ctx, q)
-		if err == nil {
-			defer rows.Close()
-			var warnLines []string
-			var total int
-			for rows.Next() {
-				total++
-				var name string
-				var lagBytes, lagSecs int64
-				_ = rows.Scan(&name, &lagBytes, &lagSecs)
-				if lagSecs > 300 || lagBytes > 104857600 { // > 5 min or > 100 MB
-					warnLines = append(warnLines, fmt.Sprintf("%s: %ds lag, %d MB",
-						name, lagSecs, lagBytes/1024/1024))
-				}
+	if !spockExists(ctx, db, "lag_tracker") {
+		// Fallback: derive lag from pg_replication_slots for spock slots
+		const q2 = `SELECT slot_name,
+		                    pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn) AS lag_bytes
+		             FROM pg_replication_slots
+		             WHERE plugin IN ('spock-output','pglogical-output','pgoutput')
+		             ORDER BY lag_bytes DESC NULLS LAST`
+		rows, err := db.Query(ctx, q2)
+		if err != nil {
+			return []Finding{NewSkip("G12-004", g12, "Spock apply lag", err.Error())}
+		}
+		defer rows.Close()
+		var warnLines []string
+		var total int
+		for rows.Next() {
+			total++
+			var slot string
+			var lagBytes int64
+			_ = rows.Scan(&slot, &lagBytes)
+			if lagBytes > 104857600 {
+				warnLines = append(warnLines, fmt.Sprintf("%s: %d MB lag", slot, lagBytes/1024/1024))
 			}
-			if len(warnLines) > 0 {
-				return []Finding{NewWarn("G12-004", g12, "Spock apply lag",
-					fmt.Sprintf("%d receiver(s) lagging", len(warnLines)),
-					"Investigate spock worker logs for errors or network issues.",
-					strings.Join(warnLines, "\n"),
-					"https://github.com/pgEdge/spock")}
-			}
-			return []Finding{NewOK("G12-004", g12, "Spock apply lag",
-				fmt.Sprintf("All %d receiver(s) within acceptable lag", total),
+		}
+		if len(warnLines) > 0 {
+			return []Finding{NewWarn("G12-004", g12, "Spock apply lag",
+				fmt.Sprintf("%d spock slot(s) lagging > 100 MB", len(warnLines)),
+				"Investigate spock worker logs for errors or conflicts.",
+				strings.Join(warnLines, "\n"),
 				"https://github.com/pgEdge/spock")}
 		}
+		return []Finding{NewOK("G12-004", g12, "Spock apply lag",
+			fmt.Sprintf("All %d spock slot(s) within acceptable lag", total),
+			"https://github.com/pgEdge/spock")}
 	}
 
-	// Fallback: derive lag from pg_replication_slots for spock slots
-	const q2 = `SELECT slot_name,
-	                    pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn) AS lag_bytes
-	             FROM pg_replication_slots
-	             WHERE plugin IN ('spock-output','pglogical-output','pgoutput')
-	             ORDER BY lag_bytes DESC NULLS LAST`
-	rows2, err := db.Query(ctx, q2)
+	// spock.lag_tracker columns: origin_name, receiver_name, replication_lag_bytes, replication_lag
+	const q = `SELECT origin_name, receiver_name,
+	                   COALESCE(replication_lag_bytes, 0)::bigint,
+	                   COALESCE(EXTRACT(EPOCH FROM replication_lag), 0)::bigint AS lag_secs
+	            FROM spock.lag_tracker
+	            ORDER BY replication_lag_bytes DESC NULLS LAST`
+	rows, err := db.Query(ctx, q)
 	if err != nil {
 		return []Finding{NewSkip("G12-004", g12, "Spock apply lag", err.Error())}
 	}
-	defer rows2.Close()
+	defer rows.Close()
 	var warnLines []string
 	var total int
-	for rows2.Next() {
+	for rows.Next() {
 		total++
-		var slot string
-		var lagBytes int64
-		_ = rows2.Scan(&slot, &lagBytes)
-		if lagBytes > 104857600 { // > 100 MB
-			warnLines = append(warnLines, fmt.Sprintf("%s: %d MB lag", slot, lagBytes/1024/1024))
+		var origin, receiver string
+		var lagBytes, lagSecs int64
+		_ = rows.Scan(&origin, &receiver, &lagBytes, &lagSecs)
+		if lagSecs > 300 || lagBytes > 104857600 {
+			warnLines = append(warnLines, fmt.Sprintf(
+				"%s→%s: %d MB / %ds lag", origin, receiver, lagBytes/1024/1024, lagSecs))
 		}
 	}
 	if len(warnLines) > 0 {
 		return []Finding{NewWarn("G12-004", g12, "Spock apply lag",
-			fmt.Sprintf("%d spock slot(s) lagging > 100 MB", len(warnLines)),
-			"Investigate spock worker logs for errors or conflicts.",
+			fmt.Sprintf("%d receiver(s) lagging > 5min or 100 MB", len(warnLines)),
+			"Investigate spock worker logs for errors or network issues.",
 			strings.Join(warnLines, "\n"),
 			"https://github.com/pgEdge/spock")}
 	}
 	return []Finding{NewOK("G12-004", g12, "Spock apply lag",
-		fmt.Sprintf("All %d spock slot(s) within acceptable lag", total),
+		fmt.Sprintf("All %d receiver(s) within acceptable lag", total),
 		"https://github.com/pgEdge/spock")}
 }
 
@@ -265,46 +268,39 @@ func g12Resolutions(ctx context.Context, db *pgxpool.Pool, cfg *config.Config) [
 }
 
 // G12-007 old exceptions
-// Detects the timestamp column name at runtime to handle Spock version differences:
-//   pgEdge Spock uses  → log_time
-//   older Spock forks  → created_at
+// pgEdge Spock exception_log uses remote_commit_ts as the event timestamp.
+// Also joins exception_status to distinguish resolved vs unresolved.
 func g12OldExceptions(ctx context.Context, db *pgxpool.Pool, cfg *config.Config) []Finding {
 	if !spockExists(ctx, db, "exception_log") {
 		return []Finding{NewSkip("G12-007", g12, "Old spock exceptions",
 			"spock.exception_log not found")}
 	}
-
-	// Detect which timestamp column this Spock version uses
-	tsCol := ""
-	for _, candidate := range []string{"log_time", "created_at"} {
-		if spockColumnExists(ctx, db, "exception_log", candidate) {
-			tsCol = candidate
-			break
-		}
-	}
-	if tsCol == "" {
-		return []Finding{NewSkip("G12-007", g12, "Old spock exceptions",
-			"Could not find a timestamp column in spock.exception_log")}
-	}
-
-	q := fmt.Sprintf(`SELECT count(*) FROM spock.exception_log
-		WHERE %s < now() - ($1 * interval '1 day')`, tsCol)
+	// Count unresolved exceptions older than the configured threshold.
+	// Unresolved = no matching row in exception_status, or status != 'resolved'.
+	const q = `SELECT count(*) FROM spock.exception_log el
+		WHERE el.remote_commit_ts < now() - ($1 * interval '1 day')
+		AND NOT EXISTS (
+			SELECT 1 FROM spock.exception_status es
+			WHERE es.remote_origin     = el.remote_origin
+			  AND es.remote_commit_ts  = el.remote_commit_ts
+			  AND es.remote_xid        = el.remote_xid
+		)`
 	var cnt int
 	if err := db.QueryRow(ctx, q, cfg.SpockOldExceptionDays).Scan(&cnt); err != nil {
 		return []Finding{NewSkip("G12-007", g12, "Old spock exceptions", err.Error())}
 	}
 	if cnt > 0 {
 		cleanupSQL := fmt.Sprintf(
-			"DELETE FROM spock.exception_log WHERE %s < now() - interval '%d days';",
-			tsCol, cfg.SpockOldExceptionDays)
-		return []Finding{NewInfo("G12-007", g12, "Old spock exceptions",
-			fmt.Sprintf("%d exception(s) older than %d day(s)", cnt, cfg.SpockOldExceptionDays),
-			"Periodically clean up old exceptions after confirming they are resolved.",
+			"DELETE FROM spock.exception_log WHERE remote_commit_ts < now() - interval '%d days';",
+			cfg.SpockOldExceptionDays)
+		return []Finding{NewWarn("G12-007", g12, "Old spock exceptions",
+			fmt.Sprintf("%d unresolved exception(s) older than %d day(s)", cnt, cfg.SpockOldExceptionDays),
+			"Review and resolve old exceptions, then clean up.",
 			cleanupSQL,
 			"https://github.com/pgEdge/spock")}
 	}
 	return []Finding{NewOK("G12-007", g12, "Old spock exceptions",
-		fmt.Sprintf("No exceptions older than %d days", cfg.SpockOldExceptionDays),
+		fmt.Sprintf("No unresolved exceptions older than %d days", cfg.SpockOldExceptionDays),
 		"https://github.com/pgEdge/spock")}
 }
 
@@ -471,110 +467,102 @@ func g12ReplSetMembership(ctx context.Context, db *pgxpool.Pool) []Finding {
 }
 
 // G12-017 sync state
-// Detects the sync status column at runtime — column name varies by Spock version:
-//   pgEdge Spock → sub_sync_status
-//   older forks  → sync_status
+// Uses spock.local_sync_status — the correct pgEdge Spock table.
+// sync_status values: 'i'=initialize, 'd'=data copy, 'f'=finished,
+//                     'y'=synced, 'r'=ready (normal), 'e'=error
 func g12SyncState(ctx context.Context, db *pgxpool.Pool) []Finding {
-	if !spockExists(ctx, db, "subscription") {
+	if !spockExists(ctx, db, "local_sync_status") {
 		return []Finding{NewSkip("G12-017", g12, "Spock sync state",
-			"spock not installed")}
+			"spock.local_sync_status not found")}
 	}
-
-	col := ""
-	for _, candidate := range []string{"sub_sync_status", "sync_status"} {
-		if spockColumnExists(ctx, db, "subscription", candidate) {
-			col = candidate
-			break
-		}
-	}
-	if col == "" {
-		// Column doesn't exist in this Spock version — check sub_enabled instead
-		const q = `SELECT sub_name FROM spock.subscription WHERE NOT sub_enabled ORDER BY 1`
-		rows, err := db.Query(ctx, q)
-		if err != nil {
-			return []Finding{NewSkip("G12-017", g12, "Spock sync state",
-				"sync_status column not found in this Spock version")}
-		}
-		defer rows.Close()
-		var disabled []string
-		for rows.Next() {
-			var name string
-			_ = rows.Scan(&name)
-			disabled = append(disabled, name)
-		}
-		if len(disabled) > 0 {
-			return []Finding{NewWarn("G12-017", g12, "Spock sync state",
-				fmt.Sprintf("%d subscription(s) disabled", len(disabled)),
-				"Re-enable with: SELECT spock.sub_enable('sub_name');",
-				strings.Join(disabled, "\n"),
-				"https://github.com/pgEdge/spock")}
-		}
-		return []Finding{NewOK("G12-017", g12, "Spock sync state",
-			"All subscriptions enabled",
-			"https://github.com/pgEdge/spock")}
-	}
-
-	q := fmt.Sprintf(`SELECT sub_name, %s FROM spock.subscription
-		WHERE %s NOT IN ('y','r','e') AND %s IS NOT NULL ORDER BY 1`, col, col, col)
+	const q = `SELECT sync_kind, sync_nspname, sync_relname, sync_status
+	            FROM spock.local_sync_status
+	            WHERE sync_status NOT IN ('r', 'y')
+	            ORDER BY sync_status, sync_nspname, sync_relname`
 	rows, err := db.Query(ctx, q)
 	if err != nil {
 		return []Finding{NewSkip("G12-017", g12, "Spock sync state", err.Error())}
 	}
 	defer rows.Close()
-	var lines []string
-	for rows.Next() {
-		var name, status string
-		_ = rows.Scan(&name, &status)
-		lines = append(lines, fmt.Sprintf("%s: status=%s", name, status))
+	stateLabel := map[string]string{
+		"i": "initialize",
+		"d": "data copy",
+		"f": "finished copy",
+		"e": "error",
 	}
-	if len(lines) > 0 {
-		return []Finding{NewWarn("G12-017", g12, "Spock sync state",
-			fmt.Sprintf("%d subscription(s) not fully synced", len(lines)),
-			"Investigate subscriptions not in synced or replicating state.",
-			strings.Join(lines, "\n"),
+	var errLines, inProgLines []string
+	for rows.Next() {
+		var kind, schema, rel, status string
+		_ = rows.Scan(&kind, &schema, &rel, &status)
+		obj := schema + "." + rel
+		if schema == "" {
+			obj = "(global)"
+		}
+		label := stateLabel[status]
+		if label == "" {
+			label = status
+		}
+		line := fmt.Sprintf("kind=%-4s  %-40s  status=%s (%s)", kind, obj, status, label)
+		if status == "e" {
+			errLines = append(errLines, line)
+		} else {
+			inProgLines = append(inProgLines, line)
+		}
+	}
+	if len(errLines) > 0 {
+		return []Finding{NewCrit("G12-017", g12, "Spock sync state",
+			fmt.Sprintf("%d object(s) in error state", len(errLines)),
+			"Check PostgreSQL logs; try: SELECT spock.sync_subscription('sub_name');",
+			strings.Join(errLines, "\n"),
+			"https://github.com/pgEdge/spock")}
+	}
+	if len(inProgLines) > 0 {
+		return []Finding{NewInfo("G12-017", g12, "Spock sync state",
+			fmt.Sprintf("%d object(s) still syncing (normal during initial setup)", len(inProgLines)),
+			"Monitor until all objects reach 'r' (ready) state.",
+			strings.Join(inProgLines, "\n"),
 			"https://github.com/pgEdge/spock")}
 	}
 	return []Finding{NewOK("G12-017", g12, "Spock sync state",
-		"All subscriptions are synced",
+		"All objects in ready/synced state",
 		"https://github.com/pgEdge/spock")}
 }
 
 // G12-019  spock.local_node registration
-//
-// Every node in a pgEdge cluster must have exactly one row in spock.local_node
-// that identifies itself. A missing or misconfigured local_node entry means
-// the node cannot participate in replication correctly.
+// local_node has node_id + node_local_interface only — join node for node_name.
 func g12LocalNode(ctx context.Context, db *pgxpool.Pool) []Finding {
 	if !spockExists(ctx, db, "local_node") {
 		return []Finding{NewSkip("G12-019", g12, "Spock local node registration",
 			"spock.local_node not found — Spock may not be fully initialised")}
 	}
-	const q = `SELECT node_name, node_id::text FROM spock.local_node LIMIT 1`
+	const q = `SELECT n.node_name, ln.node_id::text
+	            FROM spock.local_node ln
+	            JOIN spock.node n ON n.node_id = ln.node_id
+	            LIMIT 1`
 	var name, id string
 	if err := db.QueryRow(ctx, q).Scan(&name, &id); err != nil {
 		return []Finding{NewCrit("G12-019", g12, "Spock local node registration",
-			"spock.local_node is empty — this node is not registered in the cluster",
-			"Run spock.create_node() to register this node.",
+			"This node is not registered in spock.local_node",
+			"Run spock.create_node() to register this node in the cluster.",
 			"", "https://github.com/pgEdge/spock")}
 	}
 	return []Finding{NewOK("G12-019", g12, "Spock local node registration",
-		fmt.Sprintf("Node registered: %s (id=%s)", name, id),
+		fmt.Sprintf("Registered as node '%s' (id=%s)", name, id),
 		"https://github.com/pgEdge/spock")}
 }
 
-// G12-020  spock.lag_tracker — detailed replication lag per receiver
-//
-// lag_tracker is a pgEdge Spock catalog table that records the replication lag
-// for each active receiver. This check surfaces it as a standalone INFO finding
-// so operators always have a current lag snapshot even when no threshold is breached.
+// G12-020  spock.lag_tracker — per-receiver replication lag snapshot
+// Confirmed columns: origin_name, receiver_name, replication_lag_bytes, replication_lag
 func g12LagTracker(ctx context.Context, db *pgxpool.Pool) []Finding {
 	if !spockExists(ctx, db, "lag_tracker") {
 		return []Finding{NewSkip("G12-020", g12, "Spock lag tracker",
 			"spock.lag_tracker not available on this Spock version")}
 	}
-	const q = `SELECT receiver_name, lag_bytes, lag_time::text
+	const q = `SELECT origin_name, receiver_name,
+	                   COALESCE(replication_lag_bytes, 0)::bigint,
+	                   COALESCE(replication_lag, '0'::interval)::text
 	            FROM spock.lag_tracker
-	            ORDER BY lag_bytes DESC NULLS LAST`
+	            ORDER BY replication_lag_bytes DESC NULLS LAST`
 	rows, err := db.Query(ctx, q)
 	if err != nil {
 		return []Finding{NewSkip("G12-020", g12, "Spock lag tracker", err.Error())}
@@ -582,43 +570,43 @@ func g12LagTracker(ctx context.Context, db *pgxpool.Pool) []Finding {
 	defer rows.Close()
 	var lines []string
 	for rows.Next() {
-		var name, lagTime string
+		var origin, receiver, lagInterval string
 		var lagBytes int64
-		_ = rows.Scan(&name, &lagBytes, &lagTime)
-		lines = append(lines, fmt.Sprintf("%-30s  lag=%d MB  time=%s",
-			name, lagBytes/1024/1024, lagTime))
+		_ = rows.Scan(&origin, &receiver, &lagBytes, &lagInterval)
+		lines = append(lines, fmt.Sprintf("%-15s → %-15s  %d MB  %s",
+			origin, receiver, lagBytes/1024/1024, lagInterval))
 	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G12-020", g12, "Spock lag tracker",
-			"No receivers tracked (no active subscriptions on this node)",
+			"No receivers in lag_tracker (no active inbound replication on this node)",
 			"https://github.com/pgEdge/spock")}
 	}
 	return []Finding{NewInfo("G12-020", g12, "Spock lag tracker",
-		fmt.Sprintf("%d receiver(s) tracked", len(lines)),
-		"Review lag values regularly — sudden increases indicate replication pressure.",
+		fmt.Sprintf("%d receiver channel(s) tracked", len(lines)),
+		"Monitor for sudden increases — indicates replication pressure or network issues.",
 		strings.Join(lines, "\n"),
 		"https://github.com/pgEdge/spock")}
 }
 
 // G12-021  spock.queue depth
-//
-// spock.queue holds pending logical replication messages waiting to be sent to
-// subscribers. A growing queue means consumers are not keeping up with the primary.
-// An unexpectedly large queue can indicate a stalled worker or network issue.
+// Confirmed columns: queued_at, role, replication_sets, message_type, message
 func g12QueueDepth(ctx context.Context, db *pgxpool.Pool) []Finding {
 	if !spockExists(ctx, db, "queue") {
 		return []Finding{NewSkip("G12-021", g12, "Spock queue depth",
 			"spock.queue not available on this Spock version")}
 	}
 	const q = `SELECT count(*),
-	                   COALESCE(min(queued_at), now())::text AS oldest
+	                   COALESCE(EXTRACT(EPOCH FROM (now() - min(queued_at)))::int, 0) AS oldest_secs
 	            FROM spock.queue`
 	var cnt int64
-	var oldest string
-	if err := db.QueryRow(ctx, q).Scan(&cnt, &oldest); err != nil {
+	var oldestSecs int64
+	if err := db.QueryRow(ctx, q).Scan(&cnt, &oldestSecs); err != nil {
 		return []Finding{NewSkip("G12-021", g12, "Spock queue depth", err.Error())}
 	}
-	obs := fmt.Sprintf("%d message(s) in spock.queue  (oldest: %s)", cnt, oldest)
+	obs := fmt.Sprintf("%d message(s) in spock.queue", cnt)
+	if cnt > 0 {
+		obs = fmt.Sprintf("%d message(s) in spock.queue  (oldest: %ds ago)", cnt, oldestSecs)
+	}
 	if cnt > 10000 {
 		return []Finding{NewWarn("G12-021", g12, "Spock queue depth", obs,
 			"Large queue depth suggests subscribers are not consuming messages fast enough.",
@@ -626,6 +614,103 @@ func g12QueueDepth(ctx context.Context, db *pgxpool.Pool) []Finding {
 			"https://github.com/pgEdge/spock")}
 	}
 	return []Finding{NewOK("G12-021", g12, "Spock queue depth", obs,
+		"https://github.com/pgEdge/spock")}
+}
+
+// G12-022  channel_summary_stats — per-subscription conflict counts
+// Confirmed columns: sub_name, n_tup_ins, n_tup_upd, n_tup_del, n_conflict, n_dca
+func g12ChannelStats(ctx context.Context, db *pgxpool.Pool) []Finding {
+	if !spockExists(ctx, db, "channel_summary_stats") {
+		return []Finding{NewSkip("G12-022", g12, "Spock channel conflict stats",
+			"spock.channel_summary_stats not available on this Spock version")}
+	}
+	const q = `SELECT sub_name, n_tup_ins, n_tup_upd, n_tup_del,
+	                   COALESCE(n_conflict, 0) AS n_conflict,
+	                   COALESCE(n_dca, 0) AS n_dca
+	            FROM spock.channel_summary_stats
+	            ORDER BY n_conflict DESC NULLS LAST`
+	rows, err := db.Query(ctx, q)
+	if err != nil {
+		return []Finding{NewSkip("G12-022", g12, "Spock channel conflict stats", err.Error())}
+	}
+	defer rows.Close()
+	var lines []string
+	var totalConflicts, totalDCA int64
+	for rows.Next() {
+		var subName string
+		var ins, upd, del, conflicts, dca int64
+		_ = rows.Scan(&subName, &ins, &upd, &del, &conflicts, &dca)
+		totalConflicts += conflicts
+		totalDCA += dca
+		lines = append(lines, fmt.Sprintf("%-30s  ins=%-8d upd=%-8d del=%-8d conflicts=%-6d dca=%d",
+			subName, ins, upd, del, conflicts, dca))
+	}
+	if len(lines) == 0 {
+		return []Finding{NewInfo("G12-022", g12, "Spock channel conflict stats",
+			"No subscription stats yet — stats accumulate as data is replicated",
+			"", "", "https://github.com/pgEdge/spock")}
+	}
+	obs := fmt.Sprintf("%d subscription(s) — total conflicts: %d  DCA: %d",
+		len(lines), totalConflicts, totalDCA)
+	if totalConflicts > 1000 {
+		return []Finding{NewWarn("G12-022", g12, "Spock channel conflict stats", obs,
+			"High conflict count indicates write conflicts between nodes — review application logic.",
+			strings.Join(lines, "\n"),
+			"https://github.com/pgEdge/spock")}
+	}
+	return []Finding{NewOK("G12-022", g12, "Spock channel conflict stats", obs,
+		"https://github.com/pgEdge/spock")}
+}
+
+// G12-023  spock.progress — replication position per node pair
+// Shows how far behind this node is from each remote node's latest LSN.
+func g12ReplicationProgress(ctx context.Context, db *pgxpool.Pool) []Finding {
+	if !spockExists(ctx, db, "progress") {
+		return []Finding{NewSkip("G12-023", g12, "Spock replication progress",
+			"spock.progress not available on this Spock version")}
+	}
+	const q = `SELECT
+	                nl.node_name  AS local_node,
+	                nr.node_name  AS remote_node,
+	                p.remote_commit_ts,
+	                pg_wal_lsn_diff(p.remote_insert_lsn, p.remote_lsn) AS lag_bytes,
+	                p.last_updated_ts
+	            FROM spock.progress p
+	            JOIN spock.node nl ON nl.node_id = p.node_id
+	            JOIN spock.node nr ON nr.node_id = p.remote_node_id
+	            ORDER BY lag_bytes DESC NULLS LAST`
+	rows, err := db.Query(ctx, q)
+	if err != nil {
+		return []Finding{NewSkip("G12-023", g12, "Spock replication progress", err.Error())}
+	}
+	defer rows.Close()
+	var lines []string
+	var maxLagBytes int64
+	for rows.Next() {
+		var local, remote, commitTs, updatedTs string
+		var lagBytes int64
+		_ = rows.Scan(&local, &remote, &commitTs, &lagBytes, &updatedTs)
+		if lagBytes > maxLagBytes {
+			maxLagBytes = lagBytes
+		}
+		lines = append(lines, fmt.Sprintf("%-12s → %-12s  lag=%d MB  last_commit=%s",
+			remote, local, lagBytes/1024/1024, commitTs))
+	}
+	if len(lines) == 0 {
+		return []Finding{NewOK("G12-023", g12, "Spock replication progress",
+			"No replication progress entries (no active cluster connections)",
+			"https://github.com/pgEdge/spock")}
+	}
+	obs := fmt.Sprintf("%d node pair(s) tracked  (max lag: %d MB)", len(lines), maxLagBytes/1024/1024)
+	if maxLagBytes > 524288000 { // 500 MB
+		return []Finding{NewWarn("G12-023", g12, "Spock replication progress", obs,
+			"One or more node pairs have significant replication lag.",
+			strings.Join(lines, "\n"),
+			"https://github.com/pgEdge/spock")}
+	}
+	return []Finding{NewInfo("G12-023", g12, "Spock replication progress", obs,
+		"",
+		strings.Join(lines, "\n"),
 		"https://github.com/pgEdge/spock")}
 }
 
