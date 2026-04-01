@@ -1,0 +1,71 @@
+# ─────────────────────────────────────────────────────────────
+#  pg_healthcheck  ·  configuration file
+#  All values here are defaults. Override via --config or CLI flags.
+# ─────────────────────────────────────────────────────────────
+
+# ── Connection ────────────────────────────────────────────────
+connection_timeout_ms:       5000
+pg_isready_warn_ms:          500
+warn_connections_pct:        75
+critical_connections_pct:    90
+idle_in_tx_warn_seconds:     30
+
+# ── TLS ───────────────────────────────────────────────────────
+ssl_cert_warn_days:          30
+ssl_cert_critical_days:      7
+
+# ── pgBackRest ────────────────────────────────────────────────
+backrest_config:             /etc/pgbackrest/pgbackrest.conf
+backrest_stanza:             main
+backup_max_age_hours:        26
+min_retention_full:          2
+wal_ready_warn_count:        100
+wal_ready_critical_count:    500
+
+# ── Queries & Locks ───────────────────────────────────────────
+long_query_warn_seconds:     60
+long_query_critical_seconds: 300
+
+# ── Vacuum / TXID ─────────────────────────────────────────────
+txid_wrap_warn_million:      500
+txid_wrap_critical_million:  200
+
+# ── WAL / Replication ─────────────────────────────────────────
+replication_lag_warn_bytes:    52428800    # 50 MB
+replication_lag_critical_bytes: 524288000 # 500 MB
+wal_slot_retain_warn_gb:       5
+wal_slot_retain_critical_gb:   20
+
+# ── Spock / pgEdge ────────────────────────────────────────────
+spock_exception_log_warn_rows:  10000
+spock_exception_log_crit_rows:  100000
+spock_resolutions_warn_rows:    50000
+spock_old_exception_days:       7
+
+# ── amcheck ───────────────────────────────────────────────────
+# List tables to run structural B-tree verification on.
+# amcheck_table_list: ["public.orders", "public.users"]
+amcheck_table_list: []
+
+# ── Cluster mode ──────────────────────────────────────────────
+# cluster_nodes: ["node1:5432", "node2:5432", "node3:5432"]
+cluster_nodes: []
+
+# ── Cross-node row-count sampling ─────────────────────────────
+cross_node_tables: []
+cross_node_count_threshold_pct: 1.0
+
+# ── WAL Growth & Generation Rate (G14) ────────────────────────
+wal_rate_warn_mb_s:             50      # WARN if WAL generation > 50 MB/s
+wal_rate_critical_mb_s:         200     # CRITICAL if WAL generation > 200 MB/s
+wal_dir_warn_gb:                20      # WARN if pg_wal directory > 20 GB
+wal_dir_critical_gb:            50      # CRITICAL if pg_wal directory > 50 GB
+wal_rate_baseline_multiplier:   3.0     # WARN if current rate > N× rolling average
+wal_rate_baseline_samples:      12      # number of past samples to keep
+wal_fpi_ratio_warn:             0.40    # WARN if FPI records > 40% of all WAL records
+wal_filesystem_warn_pct:        60      # WARN if pg_wal filesystem > 60% full
+wal_filesystem_critical_pct:    80      # CRITICAL if pg_wal filesystem > 80% full
+wal_rate_state_file:            /tmp/pg_healthcheck_wal_rate.json
+
+# ── Per-check timeout ─────────────────────────────────────────
+check_timeout_seconds: 10

@@ -1,0 +1,16 @@
+# compiled binary
+pg_healthcheck
+
+# Go build cache
+*.test
+*.out
+
+# editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# state file written by G14 WAL baseline check
+*.json
