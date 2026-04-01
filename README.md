@@ -4,9 +4,9 @@
 
 ![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-13+-336791?logo=postgresql&logoColor=white)
-![License](https://img.shields.io/badge/license-Apache%202.0-blue)
+![License](https://img.shields.io/badge/license-PostgreSQL-blue)
 
-Runs **105+ checks across 14 groups** and queries live PostgreSQL system catalog views — no estimates, no simulated data. Output is coloured terminal text or structured JSON for GUI/API consumption.
+Runs **115+ checks across 14 groups** and queries live PostgreSQL system catalog views — no estimates, no simulated data. Output is coloured terminal text or structured JSON for GUI/API consumption.
 
 ---
 
@@ -214,6 +214,10 @@ PGPASSWORD=secret ./pg_healthcheck --host db1 --dbname prod --user postgres
   --dbname mydb --user postgres
 ```
 
+> **Note:** If two entries in `--nodes` resolve to the same database (e.g. during testing
+> with a single node), duplicate findings are automatically suppressed — each check
+> appears exactly once per unique node.
+
 ### Upgrade readiness check
 
 ```bash
@@ -364,6 +368,10 @@ wal_slot_retain_warn_gb:      5    # WARN when a slot is retaining > 5 GB of WAL
 wal_slot_retain_critical_gb:  20   # CRITICAL when retaining > 20 GB
 ```
 
+> **New in G09:** Checks G09-009 through G09-013 cover logical replication slot health —
+> invalidated slots, missing workers, and subscription relation sync state. These fire
+> automatically; no additional YAML configuration is required.
+
 #### pgEdge / Spock cluster (G12)
 
 ```yaml
@@ -470,12 +478,33 @@ check_timeout_seconds: 30
 | G06 | Indexes | 9 |
 | G07 | TOAST & Data Integrity | 9 |
 | G08 | Visibility Map | 5 |
-| G09 | WAL & Replication Slots | 8 |
+| G09 | WAL & Replication Slots | 13 |
 | G10 | Upgrade Readiness | 15 |
 | G11 | Security | 8 |
-| G12 | pgEdge / Spock Cluster | 18 |
+| G12 | pgEdge / Spock Cluster | 20 |
 | G13 | OS & Resource-Level | 7 |
 | G14 | WAL Growth & Generation Rate | 14 |
+
+### G09 — WAL & Replication Slots (recent additions)
+
+| Check | What it detects |
+|---|---|
+| G09-009 | Invalidated logical replication slots (PG 16+ marks slots invalid when WAL is gone) |
+| G09-010 | `max_slot_wal_keep_size` not set — slots can retain unlimited WAL and fill the disk |
+| G09-011 | Inactive logical replication slots older than 1 hour |
+| G09-012 | Logical replication worker status — workers not running for active subscriptions |
+| G09-013 | Subscription relation sync state — tables stuck in error or non-ready state |
+
+### G12 — pgEdge / Spock Cluster (recent additions)
+
+| Check | What it detects |
+|---|---|
+| G12-022 | Per-subscription conflict and DCA counters from `spock.channel_summary_stats` |
+| G12-023 | Replication LSN lag in MB between each node pair from `spock.progress` |
+
+> All G12 Spock catalog queries have been verified against live pgEdge Spock schema.
+> Checks that reference tables or columns not present on the installed Spock version
+> skip gracefully with an INFO message rather than erroring.
 
 ### G14 checks at a glance
 
@@ -575,10 +604,10 @@ pg_healthcheck/
 │   │   ├── g06_indexes.go       Indexes (9 checks)
 │   │   ├── g07_toast.go         TOAST & data integrity (9 checks)
 │   │   ├── g08_visibility.go    Visibility map (5 checks)
-│   │   ├── g09_wal_slots.go     WAL & replication slots (8 checks)
+│   │   ├── g09_wal_slots.go     WAL & replication slots (13 checks)
 │   │   ├── g10_upgrade.go       Upgrade readiness (15 checks)
 │   │   ├── g11_security.go      Security (8 checks)
-│   │   ├── g12_spock.go         pgEdge / Spock cluster (18 checks)
+│   │   ├── g12_spock.go         pgEdge / Spock cluster (20 checks)
 │   │   ├── g13_os_resources.go  OS & resource-level (7 checks)
 │   │   └── g14_wal_growth.go    WAL growth & generation rate (14 checks)
 │   │
@@ -601,3 +630,11 @@ pg_healthcheck/
 - **amcheck extension** — G07 B-tree integrity check skips if not installed
 - **pgEdge Spock extension** — G12 checks skip gracefully if Spock is not installed
 - **Same host as PostgreSQL** — required only for G14-013 filesystem check (uses `syscall.Statfs`)
+
+---
+
+## License
+
+pg_healthcheck is released under the [PostgreSQL License](LICENSE) — the same permissive license used by PostgreSQL itself.
+
+Copyright (c) 2025, Ahsan Hadi
