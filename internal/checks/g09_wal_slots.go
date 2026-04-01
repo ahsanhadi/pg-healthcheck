@@ -33,6 +33,7 @@ func (g *G09WALSlots) Run(ctx context.Context, db *pgxpool.Pool, cfg *config.Con
 	f = append(f, g09InactiveLogicalSlots(ctx, db, cfg)...)
 	f = append(f, g09LogicalWorkerStatus(ctx, db)...)
 	f = append(f, g09SubscriptionRelState(ctx, db)...)
+	f = append(f, g09StreamingLagTime(ctx, db)...)
 	return f, nil
 }
 
@@ -300,15 +301,16 @@ func g09CrossRefG02(ctx context.Context, db *pgxpool.Pool) []Finding {
 // dead — it can never catch up — but it continues to exist until dropped.
 // It must be dropped manually: SELECT pg_drop_replication_slot('name');
 func g09InvalidatedSlots(ctx context.Context, db *pgxpool.Pool) []Finding {
-	// invalidation_reason column was added in PG 14
+	// invalidation_reason column was added in PG 17
 	var major int
 	if err := db.QueryRow(ctx, "SELECT current_setting('server_version_num')::int / 10000").Scan(&major); err != nil {
 		return []Finding{NewSkip("G09-009", g09, "Invalidated replication slots", err.Error())}
 	}
-	if major < 14 {
+	if major < 17 {
 		return []Finding{NewInfo("G09-009", g09, "Invalidated replication slots",
-			fmt.Sprintf("PostgreSQL %d — invalidation_reason column available in PG 14+", major),
-			"", "", "https://www.postgresql.org/docs/current/view-pg-replication-slots.html")}
+			fmt.Sprintf("PostgreSQL %d — invalidation_reason column requires PG 17+", major),
+			"Upgrade to PG 17 to gain slot invalidation reason tracking.", "",
+			"https://www.postgresql.org/docs/current/view-pg-replication-slots.html")}
 	}
 
 	const q = `SELECT slot_name, slot_type, COALESCE(invalidation_reason, '') AS reason
@@ -620,4 +622,70 @@ func g09SubscriptionRelState(ctx context.Context, db *pgxpool.Pool) []Finding {
 			"https://www.postgresql.org/docs/current/view-pg-stat-subscription.html"))
 	}
 	return findings
+}
+
+// G09-014 streaming replication time-based lag
+// Byte-lag (G09-004) tells you how much data is outstanding.
+// Time-lag (write_lag / flush_lag / replay_lag) tells you how long
+// a commit had to wait. A synchronous standby with high replay_lag
+// means every COMMIT on primary blocks for that duration — a hidden
+// performance killer that byte-lag alone won't reveal.
+func g09StreamingLagTime(ctx context.Context, db *pgxpool.Pool) []Finding {
+	const q = `SELECT application_name, sync_state, state,
+	            COALESCE(EXTRACT(EPOCH FROM write_lag)::int,  0) AS write_secs,
+	            COALESCE(EXTRACT(EPOCH FROM flush_lag)::int,  0) AS flush_secs,
+	            COALESCE(EXTRACT(EPOCH FROM replay_lag)::int, 0) AS replay_secs,
+	            COALESCE(write_lag::text,  '0')  AS write_s,
+	            COALESCE(flush_lag::text,  '0')  AS flush_s,
+	            COALESCE(replay_lag::text, '0')  AS replay_s
+	            FROM pg_stat_replication
+	            ORDER BY replay_secs DESC NULLS LAST`
+	rows, err := db.Query(ctx, q)
+	if err != nil {
+		return []Finding{NewSkip("G09-014", g09, "Streaming replication lag (time)", err.Error())}
+	}
+	defer rows.Close()
+
+	var critLines, warnLines, okLines []string
+	for rows.Next() {
+		var appName, syncState, state string
+		var writeSecs, flushSecs, replaySecs int
+		var writeS, flushS, replayS string
+		_ = rows.Scan(&appName, &syncState, &state, &writeSecs, &flushSecs, &replaySecs,
+			&writeS, &flushS, &replayS)
+		line := fmt.Sprintf("%-22s sync=%-8s write=%-12s flush=%-12s replay=%s",
+			appName, syncState, writeS, flushS, replayS)
+		switch {
+		case syncState == "sync" && replaySecs > 5:
+			critLines = append(critLines, line)
+		case replaySecs > 30:
+			warnLines = append(warnLines, line)
+		default:
+			okLines = append(okLines, line)
+		}
+	}
+
+	all := append(append(critLines, warnLines...), okLines...)
+	if len(all) == 0 {
+		return []Finding{NewOK("G09-014", g09, "Streaming replication lag (time)",
+			"No streaming standbys connected",
+			"https://www.postgresql.org/docs/current/monitoring-stats.html#MONITORING-PG-STAT-REPLICATION-VIEW")}
+	}
+	if len(critLines) > 0 {
+		return []Finding{NewCrit("G09-014", g09, "Streaming replication lag (time)",
+			fmt.Sprintf("%d synchronous standby(ies) lagging — COMMITs are blocking", len(critLines)),
+			"Investigate network latency, standby I/O, or consider converting to async replication.",
+			strings.Join(all, "\n"),
+			"https://www.postgresql.org/docs/current/warm-standby.html#SYNCHRONOUS-REPLICATION")}
+	}
+	if len(warnLines) > 0 {
+		return []Finding{NewWarn("G09-014", g09, "Streaming replication lag (time)",
+			fmt.Sprintf("%d standby(ies) with replay_lag > 30s", len(warnLines)),
+			"Check standby disk I/O and network bandwidth.",
+			strings.Join(all, "\n"),
+			"https://www.postgresql.org/docs/current/monitoring-stats.html#MONITORING-PG-STAT-REPLICATION-VIEW")}
+	}
+	return []Finding{NewOK("G09-014", g09, "Streaming replication lag (time)",
+		fmt.Sprintf("%d standby(ies) — lag within acceptable range", len(all)),
+		"https://www.postgresql.org/docs/current/monitoring-stats.html#MONITORING-PG-STAT-REPLICATION-VIEW")}
 }

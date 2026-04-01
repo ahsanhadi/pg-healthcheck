@@ -59,6 +59,12 @@ func (g *G14WALGrowth) Run(ctx context.Context, db *pgxpool.Pool, cfg *config.Co
 	f = append(f, g14LongTxWALRetain(ctx, db)...)
 	f = append(f, g14CheckpointForced(ctx, db)...)
 
+	// Ensure at least 1 second has elapsed since sample 1 so the rate
+	// calculation has a meaningful denominator even on fast/quiet systems.
+	if elapsed := time.Since(t1); elapsed < time.Second {
+		time.Sleep(time.Second - elapsed)
+	}
+
 	// LSN sample 2 — taken after all other checks have run
 	lsn2, t2 := g14SampleLSN(ctx, db)
 

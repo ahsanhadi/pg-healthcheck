@@ -28,6 +28,7 @@ func (g *G06Indexes) Run(ctx context.Context, db *pgxpool.Pool, cfg *config.Conf
 	f = append(f, g06LowCardinalityIndexes(ctx, db)...)
 	f = append(f, g06BRINCorrelation(ctx, db)...)
 	f = append(f, g06StatsResetDate(ctx, db)...)
+	f = append(f, g06TablesWithoutPK(ctx, db)...)
 	return f, nil
 }
 
@@ -133,16 +134,18 @@ func g06InvalidIndexes(ctx context.Context, db *pgxpool.Pool) []Finding {
 		"https://www.postgresql.org/docs/current/sql-reindex.html")}
 }
 
-// G06-004 bloated indexes heuristic (> 100MB and size > n_live_tup * 50 * 5)
+// G06-004 bloated indexes heuristic (> 100MB and size > n_live_tup * 250 bytes)
 func g06BloatedIndexes(ctx context.Context, db *pgxpool.Pool) []Finding {
-	const q = `SELECT s.schemaname || '.' || s.relname AS tbl,
-		s.indexrelname AS idx,
-		pg_relation_size(s.indexrelid) AS idx_bytes,
-		s.n_live_tup AS live
-		FROM pg_stat_user_indexes s
-		WHERE pg_relation_size(s.indexrelid) > 104857600
-		AND s.n_live_tup > 0
-		AND pg_relation_size(s.indexrelid) > s.n_live_tup * 250
+	// n_live_tup lives in pg_stat_user_tables, not pg_stat_user_indexes — must JOIN
+	const q = `SELECT i.schemaname || '.' || i.relname AS tbl,
+		i.indexrelname AS idx,
+		pg_relation_size(i.indexrelid) AS idx_bytes,
+		t.n_live_tup AS live
+		FROM pg_stat_user_indexes i
+		JOIN pg_stat_user_tables t ON t.relid = i.relid
+		WHERE pg_relation_size(i.indexrelid) > 104857600
+		AND t.n_live_tup > 0
+		AND pg_relation_size(i.indexrelid) > t.n_live_tup * 250
 		ORDER BY idx_bytes DESC LIMIT 10`
 	rows, err := db.Query(ctx, q)
 	if err != nil {
@@ -313,9 +316,9 @@ func g06BRINCorrelation(ctx context.Context, db *pgxpool.Pool) []Finding {
 		"https://www.postgresql.org/docs/current/brin-intro.html")}
 }
 
-// G06-009 stats reset date info
+// G06-009 stats reset date info — uses pg_stat_bgwriter which always has stats_reset
 func g06StatsResetDate(ctx context.Context, db *pgxpool.Pool) []Finding {
-	const q = `SELECT min(stats_reset) FROM pg_stat_user_indexes`
+	const q = `SELECT stats_reset::text FROM pg_stat_bgwriter`
 	var resetTime *string
 	if err := db.QueryRow(ctx, q).Scan(&resetTime); err != nil {
 		return []Finding{NewSkip("G06-009", g06, "Statistics reset date", err.Error())}
@@ -332,4 +335,43 @@ func g06StatsResetDate(ctx context.Context, db *pgxpool.Pool) []Finding {
 		"Unused index checks are only reliable if stats cover a representative workload period.",
 		"",
 		"https://www.postgresql.org/docs/current/monitoring-stats.html")}
+}
+
+// G06-010 tables without a primary key
+// Tables without a PK cannot participate in logical replication or
+// Spock/pgEdge replication without REPLICA IDENTITY FULL, which is
+// very expensive. They are also harder to uniquely identify rows in.
+func g06TablesWithoutPK(ctx context.Context, db *pgxpool.Pool) []Finding {
+	const q = `SELECT n.nspname || '.' || c.relname AS tbl,
+	            pg_size_pretty(pg_relation_size(c.oid)) AS sz
+	            FROM pg_class c
+	            JOIN pg_namespace n ON n.oid = c.relnamespace
+	            WHERE c.relkind = 'r'
+	            AND n.nspname NOT IN ('pg_catalog','information_schema','spock')
+	            AND NOT EXISTS (
+	                SELECT 1 FROM pg_constraint con
+	                WHERE con.conrelid = c.oid AND con.contype = 'p'
+	            )
+	            ORDER BY pg_relation_size(c.oid) DESC LIMIT 20`
+	rows, err := db.Query(ctx, q)
+	if err != nil {
+		return []Finding{NewSkip("G06-010", g06, "Tables without primary key", err.Error())}
+	}
+	defer rows.Close()
+	var lines []string
+	for rows.Next() {
+		var tbl, sz string
+		_ = rows.Scan(&tbl, &sz)
+		lines = append(lines, fmt.Sprintf("%-50s  %s", tbl, sz))
+	}
+	if len(lines) == 0 {
+		return []Finding{NewOK("G06-010", g06, "Tables without primary key",
+			"All user tables have a primary key",
+			"https://www.postgresql.org/docs/current/ddl-constraints.html#DDL-CONSTRAINTS-PRIMARY-KEYS")}
+	}
+	return []Finding{NewWarn("G06-010", g06, "Tables without primary key",
+		fmt.Sprintf("%d table(s) have no primary key", len(lines)),
+		"Add a PRIMARY KEY or ALTER TABLE ... REPLICA IDENTITY FULL for logical replication support.",
+		strings.Join(lines, "\n"),
+		"https://www.postgresql.org/docs/current/ddl-constraints.html#DDL-CONSTRAINTS-PRIMARY-KEYS")}
 }

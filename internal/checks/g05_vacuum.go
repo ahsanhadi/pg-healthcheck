@@ -30,6 +30,8 @@ func (g *G05Vacuum) Run(ctx context.Context, db *pgxpool.Pool, cfg *config.Confi
 	f = append(f, g05TableBloat(ctx, db)...)
 	f = append(f, g05VacuumProgress(ctx, db)...)
 	f = append(f, g05AutovacuumWorkMem(ctx, db)...)
+	f = append(f, g05MultixactWraparound(ctx, db)...)
+	f = append(f, g05PreparedTransactions(ctx, db)...)
 	return f, nil
 }
 
@@ -360,4 +362,108 @@ func g05AutovacuumWorkMem(ctx context.Context, db *pgxpool.Pool) []Finding {
 	}
 	return []Finding{NewOK("G05-011", g05, "autovacuum_work_mem", obs,
 		"https://www.postgresql.org/docs/current/runtime-config-autovacuum.html")}
+}
+
+// G05-012 multixact wraparound age
+// Multixact IDs track row-level locks. Like TXID wraparound, exhausting
+// the 2^32 multixact space causes table corruption and forced shutdown.
+// It is just as dangerous as TXID wraparound but far less well-known.
+func g05MultixactWraparound(ctx context.Context, db *pgxpool.Pool) []Finding {
+	const q = `SELECT datname, mxid_age(datminmxid) AS mxage
+	            FROM pg_database
+	            WHERE datallowconn
+	            ORDER BY mxage DESC LIMIT 5`
+	rows, err := db.Query(ctx, q)
+	if err != nil {
+		return []Finding{NewSkip("G05-012", g05, "Multixact wraparound age", err.Error())}
+	}
+	defer rows.Close()
+	var critLines, warnLines []string
+	var maxAge int64
+	for rows.Next() {
+		var dbname string
+		var age int64
+		_ = rows.Scan(&dbname, &age)
+		if age > maxAge {
+			maxAge = age
+		}
+		pct := float64(age) / 21474836.47 // 2^31 / 100
+		line := fmt.Sprintf("%-30s  mxid_age=%-12d (%.1f%% of limit)", dbname, age, pct)
+		if age > 1500000000 {
+			critLines = append(critLines, line)
+		} else if age > 500000000 {
+			warnLines = append(warnLines, line)
+		}
+	}
+	if len(critLines) > 0 {
+		return []Finding{NewCrit("G05-012", g05, "Multixact wraparound age",
+			fmt.Sprintf("Max multixact age: %d — emergency VACUUM FREEZE needed", maxAge),
+			"Run VACUUM FREEZE on all tables in the affected database immediately.",
+			strings.Join(critLines, "\n"),
+			"https://www.postgresql.org/docs/current/routine-vacuuming.html#VACUUM-FOR-MULTIXACT-WRAPAROUND")}
+	}
+	if len(warnLines) > 0 {
+		return []Finding{NewWarn("G05-012", g05, "Multixact wraparound age",
+			fmt.Sprintf("Max multixact age: %d — schedule VACUUM FREEZE", maxAge),
+			"Run VACUUM FREEZE on the affected database during a maintenance window.",
+			strings.Join(warnLines, "\n"),
+			"https://www.postgresql.org/docs/current/routine-vacuuming.html#VACUUM-FOR-MULTIXACT-WRAPAROUND")}
+	}
+	return []Finding{NewOK("G05-012", g05, "Multixact wraparound age",
+		fmt.Sprintf("Max multixact age: %d (safe)", maxAge),
+		"https://www.postgresql.org/docs/current/routine-vacuuming.html#VACUUM-FOR-MULTIXACT-WRAPAROUND")}
+}
+
+// G05-013 old prepared transactions
+// Prepared transactions (two-phase commit) that are not committed or
+// rolled back hold locks, retain WAL, prevent TXID age from advancing,
+// and can silently block autovacuum from reclaiming dead tuples.
+func g05PreparedTransactions(ctx context.Context, db *pgxpool.Pool) []Finding {
+	const q = `SELECT gid, owner, database,
+	            EXTRACT(EPOCH FROM (now()-prepared))::int AS age_secs
+	            FROM pg_prepared_xacts
+	            ORDER BY prepared LIMIT 10`
+	rows, err := db.Query(ctx, q)
+	if err != nil {
+		return []Finding{NewSkip("G05-013", g05, "Prepared transactions", err.Error())}
+	}
+	defer rows.Close()
+	var lines []string
+	var maxSecs int
+	for rows.Next() {
+		var gid, owner, database string
+		var ageSecs int
+		_ = rows.Scan(&gid, &owner, &database, &ageSecs)
+		if ageSecs > maxSecs {
+			maxSecs = ageSecs
+		}
+		lines = append(lines, fmt.Sprintf("gid=%-30s owner=%-10s db=%-10s age=%s",
+			gid, owner, database, g05FmtDuration(ageSecs)))
+	}
+	if len(lines) == 0 {
+		return []Finding{NewOK("G05-013", g05, "Prepared transactions",
+			"No prepared transactions found",
+			"https://www.postgresql.org/docs/current/sql-prepare-transaction.html")}
+	}
+	obs := fmt.Sprintf("%d prepared transaction(s) — oldest: %s", len(lines), g05FmtDuration(maxSecs))
+	if maxSecs > 3600 {
+		return []Finding{NewWarn("G05-013", g05, "Prepared transactions", obs,
+			"COMMIT or ROLLBACK PREPARED these transactions. Old 2PC txns block TXID wraparound cleanup.",
+			strings.Join(lines, "\n"),
+			"https://www.postgresql.org/docs/current/sql-prepare-transaction.html")}
+	}
+	return []Finding{NewInfo("G05-013", g05, "Prepared transactions", obs,
+		"Prepared transactions are expected in 2PC workflows but should complete quickly.",
+		strings.Join(lines, "\n"),
+		"https://www.postgresql.org/docs/current/sql-prepare-transaction.html")}
+}
+
+func g05FmtDuration(secs int) string {
+	if secs >= 3600 {
+		return fmt.Sprintf("%dh%dm", secs/3600, (secs%3600)/60)
+	}
+	if secs >= 60 {
+		return fmt.Sprintf("%dm%ds", secs/60, secs%60)
+	}
+	return fmt.Sprintf("%ds", secs)
 }

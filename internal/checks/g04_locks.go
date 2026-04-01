@@ -41,6 +41,7 @@ func g04LongQueries(ctx context.Context, db *pgxpool.Pool, cfg *config.Config) [
 		WHERE state = 'active'
 		AND query_start < now() - ($1 * interval '1 second')
 		AND query NOT LIKE '%pg_stat_activity%'
+		AND backend_type = 'client backend'
 		ORDER BY age DESC LIMIT 10`
 	rows, err := db.Query(ctx, q, cfg.LongQueryWarnSec)
 	if err != nil {

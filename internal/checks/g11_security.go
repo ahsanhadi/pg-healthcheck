@@ -27,6 +27,8 @@ func (g *G11Security) Run(ctx context.Context, db *pgxpool.Pool, cfg *config.Con
 	f = append(f, g11PgAudit(ctx, db)...)
 	f = append(f, g11StaleLoginAccounts(ctx, db)...)
 	f = append(f, g11SSLCertPaths(ctx, db)...)
+	f = append(f, g11SuperuserCount(ctx, db)...)
+	f = append(f, g11PasswordEncryption(ctx, db)...)
 	return f, nil
 }
 
@@ -197,4 +199,61 @@ func g11SSLCertPaths(ctx context.Context, db *pgxpool.Pool) []Finding {
 		"Verify certificate and key file permissions (key must be owner-readable only).",
 		"The private key file should have mode 0600 and be owned by the postgres user.",
 		"https://www.postgresql.org/docs/current/ssl-tcp.html")}
+}
+
+// G11-009 superuser login count
+// Every superuser can bypass RLS, disable triggers, read all tables,
+// and drop the entire cluster. More than 2 is rarely justified.
+func g11SuperuserCount(ctx context.Context, db *pgxpool.Pool) []Finding {
+	const q = `SELECT rolname FROM pg_roles
+	            WHERE rolsuper = true AND rolcanlogin = true
+	            ORDER BY rolname`
+	rows, err := db.Query(ctx, q)
+	if err != nil {
+		return []Finding{NewSkip("G11-009", g11, "Superuser login count", err.Error())}
+	}
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var name string
+		_ = rows.Scan(&name)
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return []Finding{NewOK("G11-009", g11, "Superuser login count",
+			"No superuser login roles found",
+			"https://www.postgresql.org/docs/current/role-attributes.html")}
+	}
+	obs := fmt.Sprintf("%d superuser login role(s): %s", len(names), strings.Join(names, ", "))
+	if len(names) > 2 {
+		return []Finding{NewWarn("G11-009", g11, "Superuser login count", obs,
+			"Reduce to 1-2 superusers. Use pg_signal_backend, pg_monitor, pg_read_all_data for operators.",
+			"Each superuser bypasses all access controls including row-level security policies.",
+			"https://www.postgresql.org/docs/current/role-attributes.html")}
+	}
+	return []Finding{NewInfo("G11-009", g11, "Superuser login count", obs,
+		"Periodically audit superuser accounts.",
+		"",
+		"https://www.postgresql.org/docs/current/role-attributes.html")}
+}
+
+// G11-010 password_encryption setting
+// MD5 password hashes are vulnerable to offline brute-force attacks.
+// scram-sha-256 is the modern standard and required by many compliance frameworks.
+func g11PasswordEncryption(ctx context.Context, db *pgxpool.Pool) []Finding {
+	var enc string
+	if err := db.QueryRow(ctx,
+		"SELECT setting FROM pg_settings WHERE name='password_encryption'").Scan(&enc); err != nil {
+		return []Finding{NewSkip("G11-010", g11, "Password encryption method", err.Error())}
+	}
+	if enc == "md5" {
+		return []Finding{NewWarn("G11-010", g11, "Password encryption method",
+			"password_encryption = md5 (weak)",
+			"Set password_encryption=scram-sha-256 in postgresql.conf and rotate all user passwords.",
+			"MD5 hashes are crackable offline. SCRAM-SHA-256 provides challenge-response authentication.",
+			"https://www.postgresql.org/docs/current/auth-password.html")}
+	}
+	return []Finding{NewOK("G11-010", g11, "Password encryption method",
+		fmt.Sprintf("password_encryption = %s", enc),
+		"https://www.postgresql.org/docs/current/auth-password.html")}
 }
