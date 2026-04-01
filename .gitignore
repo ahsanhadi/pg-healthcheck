@@ -1,5 +1,5 @@
-# compiled binary
-pg_healthcheck
+# compiled binary (root level only, not the cmd/ source directory)
+/pg_healthcheck
 
 # Go build cache
 *.test
