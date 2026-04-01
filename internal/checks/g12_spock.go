@@ -52,7 +52,9 @@ func (g *G12SpockCluster) RunCluster(ctx context.Context, nodes []*NodeConn, cfg
 	all = append(all, g12SequenceCollision(ctx, nodes)...)
 	all = append(all, g12RowCountSampling(ctx, nodes, cfg)...)
 
-	return all, nil
+	// Remove exact duplicates that arise when --nodes lists the same address
+	// more than once, or two hostnames resolve to the same database instance.
+	return dedupFindings(all), nil
 }
 
 // tagNode sets NodeName on all findings.
@@ -61,6 +63,24 @@ func tagNode(findings []Finding, nodeName string) []Finding {
 		findings[i].NodeName = nodeName
 	}
 	return findings
+}
+
+// dedupFindings removes findings that are exact duplicates on
+// (CheckID, NodeName, Observed).  This prevents double-printing when
+// --nodes contains the same address twice, or two entries resolve to
+// the same database instance.
+func dedupFindings(in []Finding) []Finding {
+	seen := make(map[string]bool, len(in))
+	out := make([]Finding, 0, len(in))
+	for _, f := range in {
+		key := f.CheckID + "\x00" + f.NodeName + "\x00" + f.Observed
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, f)
+	}
+	return out
 }
 
 // spockExists checks if a spock table or view exists.
