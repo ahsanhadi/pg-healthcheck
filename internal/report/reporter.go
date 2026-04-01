@@ -21,12 +21,12 @@ import (
 // Report is the top-level JSON object emitted with --output json.
 // Every field maps directly to something a GUI can render.
 type Report struct {
-	Timestamp string          `json:"timestamp"`
-	Hostname  string          `json:"hostname"`
-	PGVersion string          `json:"pg_version"`
-	Mode      string          `json:"mode"`    // "single" | "cluster"
+	Timestamp string           `json:"timestamp"`
+	Hostname  string           `json:"hostname"`
+	PGVersion string           `json:"pg_version"`
+	Mode      string           `json:"mode"` // "single" | "cluster"
 	Checks    []checks.Finding `json:"checks"`
-	Summary   Summary         `json:"summary"`
+	Summary   Summary          `json:"summary"`
 }
 
 // Summary counts findings by severity level.

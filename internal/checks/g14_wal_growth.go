@@ -601,7 +601,7 @@ func g14LongTxWALRetain(ctx context.Context, db *pgxpool.Pool) []Finding {
 	defer rows.Close()
 
 	type txRow struct {
-		pid, ageSecs    int64
+		pid, ageSecs     int64
 		user, app, state string
 	}
 	var txs []txRow

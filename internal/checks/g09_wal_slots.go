@@ -532,11 +532,12 @@ func g09LogicalWorkerStatus(ctx context.Context, db *pgxpool.Pool) []Finding {
 //
 // When a new subscription is created, PostgreSQL copies the initial data for
 // each table through a sync process. Each table moves through states:
-//   i = initialize   (sync not yet started)
-//   d = data copy    (initial COPY in progress)
-//   f = finished     (copy done, catching up to apply position)
-//   s = synchronized (table has caught up and is being applied normally)
-//   r = ready        (normal steady-state replication)
+//
+//	i = initialize   (sync not yet started)
+//	d = data copy    (initial COPY in progress)
+//	f = finished     (copy done, catching up to apply position)
+//	s = synchronized (table has caught up and is being applied normally)
+//	r = ready        (normal steady-state replication)
 //
 // Tables stuck in 'i' or 'd' indicate a stalled initial sync — either the
 // sync worker crashed or was never scheduled. This means those tables are

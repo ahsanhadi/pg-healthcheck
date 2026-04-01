@@ -6,7 +6,7 @@
 ![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-13+-336791?logo=postgresql&logoColor=white)
 ![License](https://img.shields.io/badge/license-PostgreSQL-blue)
-![Releases](https://img.shields.io/github/v/release/ahsanhadi/pg_healthcheck)
+![Platforms](https://img.shields.io/badge/platforms-linux%20%7C%20macOS%20%7C%20windows-lightgrey)
 
 Runs **115+ checks across 14 groups** and queries live PostgreSQL system catalog views — no estimates, no simulated data. Output is coloured terminal text or structured JSON for GUI/API consumption.
 

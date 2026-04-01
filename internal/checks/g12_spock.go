@@ -163,7 +163,8 @@ func g12WorkerStatus(ctx context.Context, db *pgxpool.Pool) []Finding {
 
 // G12-004 apply lag
 // Uses spock.lag_tracker (pgEdge Spock). Correct columns confirmed:
-//   origin_name, receiver_name, replication_lag_bytes, replication_lag (interval)
+//
+//	origin_name, receiver_name, replication_lag_bytes, replication_lag (interval)
 func g12ApplyLag(ctx context.Context, db *pgxpool.Pool) []Finding {
 	if !spockExists(ctx, db, "lag_tracker") {
 		// Fallback: derive lag from pg_replication_slots for spock slots
@@ -416,8 +417,9 @@ func g12WALLevel(ctx context.Context, db *pgxpool.Pool) []Finding {
 
 // G12-015 forward_origins
 // Column name differs by Spock version:
-//   pgEdge Spock → sub_forward_origins
-//   older forks  → forward_origins
+//
+//	pgEdge Spock → sub_forward_origins
+//	older forks  → forward_origins
 func g12ForwardOrigins(ctx context.Context, db *pgxpool.Pool) []Finding {
 	if !spockExists(ctx, db, "subscription") {
 		return []Finding{NewSkip("G12-015", g12, "Spock forward_origins",
@@ -489,7 +491,8 @@ func g12ReplSetMembership(ctx context.Context, db *pgxpool.Pool) []Finding {
 // G12-017 sync state
 // Uses spock.local_sync_status — the correct pgEdge Spock table.
 // sync_status values: 'i'=initialize, 'd'=data copy, 'f'=finished,
-//                     'y'=synced, 'r'=ready (normal), 'e'=error
+//
+//	'y'=synced, 'r'=ready (normal), 'e'=error
 func g12SyncState(ctx context.Context, db *pgxpool.Pool) []Finding {
 	if !spockExists(ctx, db, "local_sync_status") {
 		return []Finding{NewSkip("G12-017", g12, "Spock sync state",

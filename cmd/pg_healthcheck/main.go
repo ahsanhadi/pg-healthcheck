@@ -1,15 +1,17 @@
 // pg_healthcheck — enterprise PostgreSQL health diagnostics
 //
 // Usage examples:
-//   pg_healthcheck --host db1 --dbname mydb --user postgres
-//   pg_healthcheck --mode cluster --nodes node1:5432,node2:5432,node3:5432
-//   pg_healthcheck --output json | jq '.summary'
-//   pg_healthcheck --groups G01,G05,G09 --verbose
+//
+//	pg_healthcheck --host db1 --dbname mydb --user postgres
+//	pg_healthcheck --mode cluster --nodes node1:5432,node2:5432,node3:5432
+//	pg_healthcheck --output json | jq '.summary'
+//	pg_healthcheck --groups G01,G05,G09 --verbose
 //
 // Exit codes:
-//   0  all OK
-//   1  at least one WARN
-//   2  at least one CRITICAL
+//
+//	0  all OK
+//	1  at least one WARN
+//	2  at least one CRITICAL
 package main
 
 import (
@@ -21,11 +23,11 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/spf13/cobra"
 	"github.com/pgedge/pg_healthcheck/internal/checks"
 	"github.com/pgedge/pg_healthcheck/internal/config"
 	"github.com/pgedge/pg_healthcheck/internal/connector"
 	"github.com/pgedge/pg_healthcheck/internal/report"
+	"github.com/spf13/cobra"
 )
 
 // ── CLI flags ────────────────────────────────────────────────────────────────
@@ -304,14 +306,30 @@ func buildConfig(cmd *cobra.Command) *config.Config {
 	}
 
 	// Re-apply CLI flags that the user explicitly set (they override YAML)
-	if cmd.Flags().Changed("host")     { cfg.Host = flagHost }
-	if cmd.Flags().Changed("port")     { cfg.Port = flagPort }
-	if cmd.Flags().Changed("dbname")   { cfg.DBName = flagDBName }
-	if cmd.Flags().Changed("user")     { cfg.User = flagUser }
-	if cmd.Flags().Changed("password") { cfg.Password = flagPassword }
-	if cmd.Flags().Changed("mode")     { cfg.Mode = flagMode }
-	if cmd.Flags().Changed("output")   { cfg.Output = flagOutput }
-	if cmd.Flags().Changed("nodes")    { cfg.ClusterNodes = strings.Split(strings.TrimSpace(flagNodes), ",") }
+	if cmd.Flags().Changed("host") {
+		cfg.Host = flagHost
+	}
+	if cmd.Flags().Changed("port") {
+		cfg.Port = flagPort
+	}
+	if cmd.Flags().Changed("dbname") {
+		cfg.DBName = flagDBName
+	}
+	if cmd.Flags().Changed("user") {
+		cfg.User = flagUser
+	}
+	if cmd.Flags().Changed("password") {
+		cfg.Password = flagPassword
+	}
+	if cmd.Flags().Changed("mode") {
+		cfg.Mode = flagMode
+	}
+	if cmd.Flags().Changed("output") {
+		cfg.Output = flagOutput
+	}
+	if cmd.Flags().Changed("nodes") {
+		cfg.ClusterNodes = strings.Split(strings.TrimSpace(flagNodes), ",")
+	}
 
 	return cfg
 }
