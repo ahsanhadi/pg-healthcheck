@@ -1,0 +1,102 @@
+version: 2
+
+project_name: pg_healthcheck
+
+before:
+  hooks:
+    - go mod tidy
+    - go mod verify
+
+builds:
+  - id: pg_healthcheck
+    main: ./cmd/pg_healthcheck/
+    binary: pg_healthcheck
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+    env:
+      - CGO_ENABLED=0
+
+archives:
+  - id: default
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_
+      {{- if eq .Os "darwin"}}macOS{{- else}}{{ .Os }}{{- end}}_
+      {{- .Arch }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+      - healthcheck.yaml
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - Merge pull request
+      - Merge branch
+  groups:
+    - title: New Features
+      regexp: '^.*feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: Bug Fixes
+      regexp: '^.*fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Improvements
+      regexp: '^.*G\d+.*:.+$'
+      order: 2
+    - title: Other Changes
+      order: 99
+
+release:
+  github:
+    owner: ahsanhadi
+    name: pg_healthcheck
+  name_template: "pg_healthcheck {{.Version}}"
+  header: |
+    ## pg_healthcheck {{.Version}}
+
+    PostgreSQL health diagnostics for single instances and pgEdge Spock clusters.
+
+    ### Install
+
+    **macOS (Apple Silicon)**
+    ```bash
+    curl -L https://github.com/ahsanhadi/pg_healthcheck/releases/download/{{.Tag}}/pg_healthcheck_{{.Version}}_macOS_arm64.tar.gz | tar xz
+    ./pg_healthcheck --host localhost --dbname mydb --user postgres
+    ```
+
+    **macOS (Intel)**
+    ```bash
+    curl -L https://github.com/ahsanhadi/pg_healthcheck/releases/download/{{.Tag}}/pg_healthcheck_{{.Version}}_macOS_amd64.tar.gz | tar xz
+    ```
+
+    **Linux (amd64)**
+    ```bash
+    curl -L https://github.com/ahsanhadi/pg_healthcheck/releases/download/{{.Tag}}/pg_healthcheck_{{.Version}}_linux_amd64.tar.gz | tar xz
+    ```
+  footer: |
+    **Full Changelog**: https://github.com/ahsanhadi/pg_healthcheck/compare/{{.PreviousTag}}...{{.Tag}}
+
+    Released under the [PostgreSQL License](https://github.com/ahsanhadi/pg_healthcheck/blob/main/LICENSE).
