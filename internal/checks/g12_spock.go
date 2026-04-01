@@ -722,8 +722,13 @@ func g12NodeListConsistency(ctx context.Context, nodes []*NodeConn) []Finding {
 		return []Finding{NewSkip("G12-001", g12, "Node list consistency",
 			"Need >= 2 nodes for cross-node comparison")}
 	}
-	type nodeList []string
-	nodeLists := make(map[string]nodeList)
+	// Use a slice of structs keyed by index so two nodes at the same address
+	// never overwrite each other (map[nodeName] collapses duplicates).
+	type nodeEntry struct {
+		name string
+		list []string
+	}
+	var entries []nodeEntry
 	for _, node := range nodes {
 		if !spockExists(ctx, node.DB, "node") {
 			continue
@@ -740,38 +745,29 @@ func g12NodeListConsistency(ctx context.Context, nodes []*NodeConn) []Finding {
 			names = append(names, n)
 		}
 		rows.Close()
-		nodeLists[node.Name] = names
+		entries = append(entries, nodeEntry{node.Name, names})
 	}
-	if len(nodeLists) < 2 {
+	if len(entries) < 2 {
 		return []Finding{NewSkip("G12-001", g12, "Node list consistency",
-			"Could not read node lists from enough nodes")}
+			"Could not read spock.node from enough nodes — verify spock is initialised on all cluster members")}
 	}
-	// Compare all node lists against the first
-	var refNode string
-	var refList nodeList
-	for n, l := range nodeLists {
-		refNode = n
-		refList = l
-		break
-	}
+	ref := entries[0]
 	var diffs []string
-	for n, l := range nodeLists {
-		if n == refNode {
-			continue
-		}
-		if strings.Join(refList, ",") != strings.Join(l, ",") {
-			diffs = append(diffs, fmt.Sprintf("%s has %v vs %s has %v", n, l, refNode, refList))
+	for _, e := range entries[1:] {
+		if strings.Join(ref.list, ",") != strings.Join(e.list, ",") {
+			diffs = append(diffs, fmt.Sprintf("%s sees %v  vs  %s sees %v",
+				ref.name, ref.list, e.name, e.list))
 		}
 	}
 	if len(diffs) > 0 {
 		return []Finding{NewCrit("G12-001", g12, "Node list consistency",
-			fmt.Sprintf("Node lists differ across %d node(s)", len(diffs)),
+			fmt.Sprintf("Node lists differ across %d node pair(s)", len(diffs)),
 			"Ensure all nodes have the same spock node membership.",
 			strings.Join(diffs, "\n"),
 			"https://github.com/pgEdge/spock")}
 	}
 	return []Finding{NewOK("G12-001", g12, "Node list consistency",
-		fmt.Sprintf("All %d nodes have consistent node list", len(nodeLists)),
+		fmt.Sprintf("All %d nodes have consistent node list", len(entries)),
 		"https://github.com/pgEdge/spock")}
 }
 
@@ -783,25 +779,21 @@ func g12TableParity(ctx context.Context, nodes []*NodeConn) []Finding {
 	}
 	const q = `SELECT string_agg(schemaname || '.' || tablename, ',' ORDER BY schemaname, tablename)
 		FROM pg_tables WHERE schemaname NOT IN ('pg_catalog','information_schema','spock')`
-	tableSets := make(map[string]string)
+	type nodeEntry struct {
+		name   string
+		tables string
+	}
+	var entries []nodeEntry
 	for _, node := range nodes {
 		var tables string
 		_ = node.DB.QueryRow(ctx, q).Scan(&tables)
-		tableSets[node.Name] = tables
+		entries = append(entries, nodeEntry{node.Name, tables})
 	}
+	ref := entries[0]
 	var diffs []string
-	var refNode, refTables string
-	for n, t := range tableSets {
-		refNode = n
-		refTables = t
-		break
-	}
-	for n, t := range tableSets {
-		if n == refNode {
-			continue
-		}
-		if t != refTables {
-			diffs = append(diffs, fmt.Sprintf("Schema mismatch: %s vs %s", refNode, n))
+	for _, e := range entries[1:] {
+		if e.tables != ref.tables {
+			diffs = append(diffs, fmt.Sprintf("Schema mismatch: %s vs %s", ref.name, e.name))
 		}
 	}
 	if len(diffs) > 0 {
@@ -824,25 +816,21 @@ func g12IndexParity(ctx context.Context, nodes []*NodeConn) []Finding {
 	}
 	const q = `SELECT string_agg(indexname || '.' || indexdef, '|' ORDER BY indexname)
 		FROM pg_indexes WHERE schemaname NOT IN ('pg_catalog','information_schema','spock')`
-	indexSets := make(map[string]string)
+	type nodeEntry struct {
+		name string
+		idxs string
+	}
+	var entries []nodeEntry
 	for _, node := range nodes {
 		var idxs string
 		_ = node.DB.QueryRow(ctx, q).Scan(&idxs)
-		indexSets[node.Name] = idxs
+		entries = append(entries, nodeEntry{node.Name, idxs})
 	}
-	var refNode, refIdxs string
-	for n, i := range indexSets {
-		refNode = n
-		refIdxs = i
-		break
-	}
+	ref := entries[0]
 	var diffs []string
-	for n, i := range indexSets {
-		if n == refNode {
-			continue
-		}
-		if i != refIdxs {
-			diffs = append(diffs, fmt.Sprintf("Index mismatch: %s vs %s", refNode, n))
+	for _, e := range entries[1:] {
+		if e.idxs != ref.idxs {
+			diffs = append(diffs, fmt.Sprintf("Index mismatch: %s vs %s", ref.name, e.name))
 		}
 	}
 	if len(diffs) > 0 {
@@ -869,6 +857,9 @@ func g12SequenceCollision(ctx context.Context, nodes []*NodeConn) []Finding {
 		WHERE schemaname NOT IN ('pg_catalog','information_schema')
 		AND increment_by = 1
 		ORDER BY 1 LIMIT 10`
+	// dedup key: (nodeName, observed) — prevents identical findings when the
+	// same address is listed twice in --nodes or two nodes share a hostname.
+	seen := make(map[string]bool)
 	var allFindings []Finding
 	for _, node := range nodes {
 		rows, err := node.DB.Query(ctx, q)
@@ -883,13 +874,20 @@ func g12SequenceCollision(ctx context.Context, nodes []*NodeConn) []Finding {
 			seqs = append(seqs, fmt.Sprintf("%s (increment=%d)", seqname, inc))
 		}
 		rows.Close()
-		if len(seqs) > 0 {
-			allFindings = append(allFindings, tagNode([]Finding{NewWarn("G12-014", g12, "Sequence increment collision",
-				fmt.Sprintf("%d sequence(s) with increment=1 on multi-master cluster", len(seqs)),
-				"Use non-overlapping sequence ranges or ddlx_sequence_set_options() to set unique offsets/increments.",
-				strings.Join(seqs, "\n"),
-				"https://github.com/pgEdge/spock")}, node.Name)...)
+		if len(seqs) == 0 {
+			continue
 		}
+		obs := fmt.Sprintf("%d sequence(s) with increment=1 on multi-master cluster", len(seqs))
+		dedupKey := node.Name + "|" + obs
+		if seen[dedupKey] {
+			continue
+		}
+		seen[dedupKey] = true
+		allFindings = append(allFindings, tagNode([]Finding{NewWarn("G12-014", g12, "Sequence increment collision",
+			obs,
+			"Use non-overlapping sequence ranges or ddlx_sequence_set_options() to set unique offsets/increments.",
+			strings.Join(seqs, "\n"),
+			"https://github.com/pgEdge/spock")}, node.Name)...)
 	}
 	if len(allFindings) == 0 {
 		return []Finding{NewOK("G12-014", g12, "Sequence increment collision",
@@ -913,7 +911,11 @@ func g12RowCountSampling(ctx context.Context, nodes []*NodeConn, cfg *config.Con
 		table string
 		count int64
 	}
-	nodeCounts := make(map[string][]tableCount)
+	type nodeEntry struct {
+		name   string
+		counts []tableCount
+	}
+	var nodeData []nodeEntry
 	for _, node := range nodes {
 		rows, err := node.DB.Query(ctx, q)
 		if err != nil {
@@ -927,40 +929,35 @@ func g12RowCountSampling(ctx context.Context, nodes []*NodeConn, cfg *config.Con
 			counts = append(counts, tableCount{tbl, cnt})
 		}
 		rows.Close()
-		nodeCounts[node.Name] = counts
+		nodeData = append(nodeData, nodeEntry{node.Name, counts})
 	}
 	threshold := cfg.CrossNodeCountThresholdPct
 	if threshold <= 0 {
 		threshold = 10.0
 	}
 	var diffs []string
-	var refNode string
-	var refCounts []tableCount
-	for n, c := range nodeCounts {
-		refNode = n
-		refCounts = c
-		break
+	if len(nodeData) < 2 {
+		return []Finding{NewSkip("G12-018", g12, "Row count sampling",
+			"Could not gather row counts from enough nodes")}
 	}
-	for n, counts := range nodeCounts {
-		if n == refNode {
-			continue
-		}
+	ref := nodeData[0]
+	for _, e := range nodeData[1:] {
 		countMap := make(map[string]int64)
-		for _, tc := range counts {
+		for _, tc := range e.counts {
 			countMap[tc.table] = tc.count
 		}
-		for _, ref := range refCounts {
-			other, ok := countMap[ref.table]
-			if !ok || ref.count == 0 {
+		for _, r := range ref.counts {
+			other, ok := countMap[r.table]
+			if !ok || r.count == 0 {
 				continue
 			}
-			diff := float64(ref.count-other) / float64(ref.count) * 100
+			diff := float64(r.count-other) / float64(r.count) * 100
 			if diff < 0 {
 				diff = -diff
 			}
 			if diff > threshold {
 				diffs = append(diffs, fmt.Sprintf("%s: %s has %d vs %s has %d (%.1f%% diff)",
-					ref.table, refNode, ref.count, n, other, diff))
+					r.table, ref.name, r.count, e.name, other, diff))
 			}
 		}
 	}
