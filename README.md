@@ -2,9 +2,11 @@
 
 > Enterprise-grade PostgreSQL health diagnostics for single instances and pgEdge multi-node Spock clusters.
 
+![CI](https://github.com/ahsanhadi/pg_healthcheck/actions/workflows/ci.yml/badge.svg)
 ![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-13+-336791?logo=postgresql&logoColor=white)
 ![License](https://img.shields.io/badge/license-PostgreSQL-blue)
+![Releases](https://img.shields.io/github/v/release/ahsanhadi/pg_healthcheck)
 
 Runs **115+ checks across 14 groups** and queries live PostgreSQL system catalog views — no estimates, no simulated data. Output is coloured terminal text or structured JSON for GUI/API consumption.
 
@@ -166,13 +168,32 @@ If two of these are simultaneously CRITICAL, the reporter prints a **composite a
 
 ## Quick Start
 
-### Build
+### Download a release (no Go required)
+
+Pre-built binaries for Linux, macOS, and Windows are available on the [Releases page](https://github.com/ahsanhadi/pg_healthcheck/releases).
 
 ```bash
+# macOS (Apple Silicon)
+curl -L https://github.com/ahsanhadi/pg_healthcheck/releases/latest/download/pg_healthcheck_macOS_arm64.tar.gz | tar xz
+
+# macOS (Intel)
+curl -L https://github.com/ahsanhadi/pg_healthcheck/releases/latest/download/pg_healthcheck_macOS_amd64.tar.gz | tar xz
+
+# Linux (amd64)
+curl -L https://github.com/ahsanhadi/pg_healthcheck/releases/latest/download/pg_healthcheck_linux_amd64.tar.gz | tar xz
+```
+
+Each archive includes the binary, `LICENSE`, `README.md`, and a ready-to-edit `healthcheck.yaml`.
+
+### Build from source
+
+```bash
+git clone https://github.com/ahsanhadi/pg_healthcheck.git
+cd pg_healthcheck
 go build -o pg_healthcheck ./cmd/pg_healthcheck/
 ```
 
-Requires Go 1.23+. Install with `brew install go` on macOS.
+Requires Go 1.23+. Install with `brew install go` on macOS or `apt install golang-go` on Ubuntu.
 
 ### Run against a local database
 
@@ -615,6 +636,12 @@ pg_healthcheck/
 │       └── reporter.go          Text + JSON output, composite alerts, exit code
 │
 ├── healthcheck.yaml             All tunable thresholds (copy and customise)
+├── .goreleaser.yaml             GoReleaser — multi-platform release builds
+├── .golangci.yml                golangci-lint configuration
+├── .github/
+│   └── workflows/
+│       ├── ci.yml               CI — lint, vet, build, test on every push/PR
+│       └── release.yml          Release — builds & publishes binaries on v* tags
 ├── go.mod
 └── README.md
 ```
@@ -630,6 +657,29 @@ pg_healthcheck/
 - **amcheck extension** — G07 B-tree integrity check skips if not installed
 - **pgEdge Spock extension** — G12 checks skip gracefully if Spock is not installed
 - **Same host as PostgreSQL** — required only for G14-013 filesystem check (uses `syscall.Statfs`)
+
+---
+
+## CI & Releases
+
+Every push and pull request to `main` runs the full CI pipeline:
+
+- **gofmt** — formatting check
+- **go vet** — static analysis
+- **golangci-lint** — errcheck, staticcheck, unused, ineffassign
+- **Cross-compile** — verified to build on linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64
+- **go test -race** — race detector enabled
+
+### Cutting a release
+
+Tag the commit and push — GoReleaser does the rest:
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+This automatically builds binaries for all platforms, packages each one with `LICENSE`, `README.md`, and `healthcheck.yaml`, and publishes a GitHub Release with a generated changelog.
 
 ---
 
