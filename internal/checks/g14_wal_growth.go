@@ -552,6 +552,13 @@ func g14WALFilesystemPct(ctx context.Context, db *pgxpool.Pool, cfg *config.Conf
 
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(walPath, &stat); err != nil {
+		if os.IsPermission(err) {
+			return []Finding{NewInfo("G14-013", g14, "pg_wal filesystem usage",
+				fmt.Sprintf("pg_wal filesystem check: permission denied (path: %s)", walPath),
+				"Grant the OS user running pg_healthcheck read access to the data directory, or run as the postgres user.",
+				fmt.Sprintf("syscall.Statfs error: %v", err),
+				"https://www.postgresql.org/docs/current/wal-configuration.html")}
+		}
 		return []Finding{NewInfo("G14-013", g14, "pg_wal filesystem usage",
 			fmt.Sprintf("pg_wal filesystem check requires local execution (path: %s)", walPath),
 			"Run pg_healthcheck directly on the PostgreSQL host — not via a remote connection.",

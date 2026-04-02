@@ -83,6 +83,16 @@ func dedupFindings(in []Finding) []Finding {
 	return out
 }
 
+// spockInstalled returns true when the spock extension is present on this node.
+// Used to gate checks that only make sense in a Spock cluster (e.g. wal_level,
+// hot_standby_feedback) so they don't fire as false positives on plain PostgreSQL.
+func spockInstalled(ctx context.Context, db *pgxpool.Pool) bool {
+	var exists bool
+	_ = db.QueryRow(ctx,
+		"SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname='spock')").Scan(&exists)
+	return exists
+}
+
 // spockExists checks if a spock table or view exists.
 func spockExists(ctx context.Context, db *pgxpool.Pool, tableName string) bool {
 	var exists bool
@@ -392,7 +402,13 @@ func g12SpockWALSlots(ctx context.Context, db *pgxpool.Pool) []Finding {
 }
 
 // G12-010 hot_standby_feedback
+// Only relevant when Spock is installed; skip silently on plain PostgreSQL so
+// this check does not produce a misleading WARN for non-Spock deployments.
 func g12HotStandbyFeedback(ctx context.Context, db *pgxpool.Pool) []Finding {
+	if !spockInstalled(ctx, db) {
+		return []Finding{NewSkip("G12-010", g12, "hot_standby_feedback",
+			"Spock extension not installed on this node — check not applicable")}
+	}
 	var val string
 	if err := db.QueryRow(ctx, "SELECT setting FROM pg_settings WHERE name='hot_standby_feedback'").Scan(&val); err != nil {
 		return []Finding{NewSkip("G12-010", g12, "hot_standby_feedback", err.Error())}
@@ -410,7 +426,13 @@ func g12HotStandbyFeedback(ctx context.Context, db *pgxpool.Pool) []Finding {
 }
 
 // G12-011 wal_level=logical
+// Only relevant when Spock is installed; skip silently on plain PostgreSQL so
+// this check does not produce a false CRITICAL for non-Spock deployments.
 func g12WALLevel(ctx context.Context, db *pgxpool.Pool) []Finding {
+	if !spockInstalled(ctx, db) {
+		return []Finding{NewSkip("G12-011", g12, "wal_level",
+			"Spock extension not installed on this node — check not applicable")}
+	}
 	var val string
 	if err := db.QueryRow(ctx, "SELECT setting FROM pg_settings WHERE name='wal_level'").Scan(&val); err != nil {
 		return []Finding{NewSkip("G12-011", g12, "wal_level", err.Error())}
