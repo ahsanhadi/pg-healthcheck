@@ -60,6 +60,9 @@ func g04LongQueries(ctx context.Context, db *pgxpool.Pool, cfg *config.Config) [
 			warnLines = append(warnLines, line)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G04-001", g04, "Long-running queries", "scan error: "+err.Error())}
+	}
 	var findings []Finding
 	if len(critLines) > 0 {
 		findings = append(findings, NewCrit("G04-001", g04, "Long-running queries",
@@ -106,6 +109,9 @@ func g04IdleInTxAge(ctx context.Context, db *pgxpool.Pool, cfg *config.Config) [
 			maxAge = age
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G04-002", g04, "Idle-in-transaction age", "scan error: "+err.Error())}
+	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G04-002", g04, "Idle-in-transaction age",
 			"No idle-in-transaction sessions",
@@ -147,6 +153,9 @@ func g04LockBlockerChains(ctx context.Context, db *pgxpool.Pool) []Finding {
 		_ = rows.Scan(&pid, &user, &blockerPid, &blockerUser, &waitSecs, &query)
 		lines = append(lines, fmt.Sprintf("PID %d (%s) blocked by PID %d (%s) for %ds: %s",
 			pid, user, blockerPid, blockerUser, waitSecs, query))
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G04-003", g04, "Lock blocker chains", "scan error: "+err.Error())}
 	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G04-003", g04, "Lock blocker chains",
@@ -214,22 +223,36 @@ func g04IdleInTxTimeout(ctx context.Context, db *pgxpool.Pool) []Finding {
 		"https://www.postgresql.org/docs/current/runtime-config-client.html")}
 }
 
-// G04-007 pg_stat_statements absent
+// G04-007 pg_stat_statements absent or not in shared_preload_libraries
+// The extension must be both installed AND listed in shared_preload_libraries.
+// If it is only in pg_extension but not preloaded, pg_stat_statements will be
+// empty because it never hooked into the query executor at startup.
 func g04PgStatStatements(ctx context.Context, db *pgxpool.Pool) []Finding {
-	var exists bool
-	const q = `SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname='pg_stat_statements')`
-	if err := db.QueryRow(ctx, q).Scan(&exists); err != nil {
+	var extExists bool
+	if err := db.QueryRow(ctx,
+		"SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname='pg_stat_statements')").Scan(&extExists); err != nil {
 		return []Finding{NewSkip("G04-007", g04, "pg_stat_statements extension", err.Error())}
 	}
-	if !exists {
+	if !extExists {
 		return []Finding{NewWarn("G04-007", g04, "pg_stat_statements extension",
 			"pg_stat_statements is not installed",
-			"Install pg_stat_statements: CREATE EXTENSION pg_stat_statements;",
+			"Add pg_stat_statements to shared_preload_libraries, restart PostgreSQL, then: CREATE EXTENSION pg_stat_statements;",
 			"Without pg_stat_statements, query performance analysis is severely limited.",
 			"https://www.postgresql.org/docs/current/pgstatstatements.html")}
 	}
+	// Also verify it is in shared_preload_libraries — otherwise the extension exists
+	// but the in-memory hook is missing and all views are empty.
+	var spl string
+	_ = db.QueryRow(ctx, "SELECT setting FROM pg_settings WHERE name='shared_preload_libraries'").Scan(&spl)
+	if spl != "" && !strings.Contains(spl, "pg_stat_statements") {
+		return []Finding{NewWarn("G04-007", g04, "pg_stat_statements extension",
+			"pg_stat_statements extension exists but is NOT in shared_preload_libraries",
+			"Add pg_stat_statements to shared_preload_libraries in postgresql.conf and restart.",
+			fmt.Sprintf("shared_preload_libraries = %q — pg_stat_statements missing", spl),
+			"https://www.postgresql.org/docs/current/pgstatstatements.html")}
+	}
 	return []Finding{NewOK("G04-007", g04, "pg_stat_statements extension",
-		"pg_stat_statements is installed",
+		"pg_stat_statements is installed and loaded",
 		"https://www.postgresql.org/docs/current/pgstatstatements.html")}
 }
 
@@ -253,6 +276,9 @@ func g04TopQueries(ctx context.Context, db *pgxpool.Pool) []Finding {
 		_ = rows.Scan(&totalMs, &calls, &meanMs, &shortQ)
 		lines = append(lines, fmt.Sprintf("total=%.0fms calls=%d mean=%.2fms: %s",
 			totalMs, calls, meanMs, shortQ))
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G04-008", g04, "Top queries by total_exec_time", "scan error: "+err.Error())}
 	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G04-008", g04, "Top queries by total_exec_time",

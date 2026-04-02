@@ -63,6 +63,9 @@ func g10LegacyExtensions(ctx context.Context, db *pgxpool.Pool, cfg *config.Conf
 		_ = rows.Scan(&name)
 		found = append(found, name)
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G10-001", g10, "Legacy extensions (tsearch2/plpython2u)", "scan error: "+err.Error())}
+	}
 	if len(found) > 0 {
 		return []Finding{NewCrit("G10-001", g10, "Legacy extensions (tsearch2/plpython2u)",
 			fmt.Sprintf("Found: %s — incompatible with PostgreSQL %d", strings.Join(found, ", "), cfg.TargetVersion),
@@ -118,6 +121,9 @@ func g10AbsTimeColumns(ctx context.Context, db *pgxpool.Pool, cfg *config.Config
 		_ = rows.Scan(&col, &typname)
 		lines = append(lines, fmt.Sprintf("%s (%s)", col, typname))
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G10-003", g10, "abstime/reltime/tinterval columns", "scan error: "+err.Error())}
+	}
 	if len(lines) > 0 {
 		return []Finding{NewCrit("G10-003", g10, "abstime/reltime/tinterval columns",
 			fmt.Sprintf("%d column(s) use removed types", len(lines)),
@@ -166,6 +172,9 @@ func g10SQLASCIIDatabases(ctx context.Context, db *pgxpool.Pool) []Finding {
 		_ = rows.Scan(&name)
 		found = append(found, name)
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G10-005", g10, "SQL_ASCII databases", "scan error: "+err.Error())}
+	}
 	if len(found) > 0 {
 		return []Finding{NewWarn("G10-005", g10, "SQL_ASCII databases",
 			fmt.Sprintf("%d SQL_ASCII database(s): %s", len(found), strings.Join(found, ", ")),
@@ -199,6 +208,9 @@ func g10CollationVersion(ctx context.Context, db *pgxpool.Pool) []Finding {
 		}
 		lines = append(lines, fmt.Sprintf("%s: %s", datname, v))
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G10-006", g10, "Collation version", "scan error: "+err.Error())}
+	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G10-006", g10, "Collation version",
 			"No collation version information available",
@@ -230,6 +242,9 @@ func g10WideColumns(ctx context.Context, db *pgxpool.Pool) []Finding {
 		var ncols int
 		_ = rows.Scan(&tbl, &ncols)
 		lines = append(lines, fmt.Sprintf("%s: %d columns", tbl, ncols))
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G10-007", g10, "Tables with > 1600 columns", "scan error: "+err.Error())}
 	}
 	if len(lines) > 0 {
 		return []Finding{NewCrit("G10-007", g10, "Tables with > 1600 columns",
@@ -350,6 +365,9 @@ func g10GhostExtensions(ctx context.Context, db *pgxpool.Pool) []Finding {
 		_ = rows.Scan(&name)
 		found = append(found, name)
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G10-012", g10, "Ghost extensions", "scan error: "+err.Error())}
+	}
 	if len(found) > 0 {
 		return []Finding{NewCrit("G10-012", g10, "Ghost extensions",
 			fmt.Sprintf("%d ghost extension(s): %s", len(found), strings.Join(found, ", ")),
@@ -396,6 +414,9 @@ func g10CustomTablespaces(ctx context.Context, db *pgxpool.Pool) []Finding {
 		_ = rows.Scan(&name, &path)
 		lines = append(lines, fmt.Sprintf("%s -> %s", name, path))
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G10-014", g10, "Custom tablespace paths", "scan error: "+err.Error())}
+	}
 	if len(lines) > 0 {
 		return []Finding{NewWarn("G10-014", g10, "Custom tablespace paths",
 			fmt.Sprintf("%d custom tablespace(s)", len(lines)),
@@ -423,6 +444,9 @@ func g10ZeroConnLimitDatabases(ctx context.Context, db *pgxpool.Pool) []Finding 
 		var name string
 		_ = rows.Scan(&name)
 		found = append(found, name)
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G10-015", g10, "datconnlimit=0 databases", "scan error: "+err.Error())}
 	}
 	if len(found) > 0 {
 		return []Finding{NewWarn("G10-015", g10, "datconnlimit=0 databases",

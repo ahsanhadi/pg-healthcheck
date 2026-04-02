@@ -49,6 +49,9 @@ func g08HeapBlksRead(ctx context.Context, db *pgxpool.Pool) []Finding {
 		_ = rows.Scan(&tbl, &heapRead, &idxScan)
 		lines = append(lines, fmt.Sprintf("%s: heap_blks_read=%d idx_scan=%d", tbl, heapRead, idxScan))
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G08-001", g08, "High heap_blks_read", "scan error: "+err.Error())}
+	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G08-001", g08, "High heap_blks_read",
 			"No tables with disproportionately high heap block reads",
@@ -82,6 +85,9 @@ func g08AllVisibleCount(ctx context.Context, db *pgxpool.Pool) []Finding {
 		var pages, allVis int
 		_ = rows.Scan(&tbl, &pages, &allVis)
 		lines = append(lines, fmt.Sprintf("%s: relpages=%d relallvisible=%d", tbl, pages, allVis))
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G08-002", g08, "relallvisible consistency", "scan error: "+err.Error())}
 	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G08-002", g08, "relallvisible consistency",
@@ -163,6 +169,9 @@ func g08SuspiciousLowDeadTup(ctx context.Context, db *pgxpool.Pool) []Finding {
 		}
 		lines = append(lines, fmt.Sprintf("%s: upd=%d del=%d dead=%d last_autovacuum=%s",
 			tbl, upd, del, dead, vac))
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G08-005", g08, "Suspiciously low dead tuple count", "scan error: "+err.Error())}
 	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G08-005", g08, "Suspiciously low dead tuple count",

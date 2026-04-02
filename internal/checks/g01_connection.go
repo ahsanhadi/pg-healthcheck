@@ -220,6 +220,9 @@ func g01IdleInTx(ctx context.Context, db *pgxpool.Pool, cfg *config.Config) []Fi
 		_ = rows.Scan(&pid, &user, &dbn, &age)
 		found = append(found, fmt.Sprintf("PID %d (%ds) %s@%s", pid, age, user, dbn))
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G01-007", g01, "Idle-in-transaction connections", "scan error: "+err.Error())}
+	}
 	if len(found) == 0 {
 		return []Finding{NewOK("G01-007", g01, "Idle-in-transaction connections",
 			fmt.Sprintf("None older than %ds", cfg.IdleInTxWarnSec),
@@ -258,6 +261,9 @@ func g01PerDBConns(ctx context.Context, db *pgxpool.Pool, cfg *config.Config) []
 				"https://www.postgresql.org/docs/current/monitoring-stats.html"))
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G01-008", g01, "Per-database connection counts", "scan error: "+err.Error())}
+	}
 	if len(findings) == 0 {
 		return []Finding{NewOK("G01-008", g01, "Per-database connection counts",
 			"No database exceeds 50% of max_connections",
@@ -284,6 +290,9 @@ func g01HBATrust(ctx context.Context, db *pgxpool.Pool) []Finding {
 		var typ, dbs, users, addr string
 		_ = rows.Scan(&typ, &dbs, &users, &addr)
 		found = append(found, fmt.Sprintf("%s db=%s user=%s addr=%s", typ, dbs, users, addr))
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G01-009", g01, "pg_hba trust on non-loopback", "scan error: "+err.Error())}
 	}
 	if len(found) == 0 {
 		return []Finding{NewOK("G01-009", g01, "pg_hba trust on non-loopback",

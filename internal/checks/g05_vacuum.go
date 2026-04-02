@@ -32,6 +32,8 @@ func (g *G05Vacuum) Run(ctx context.Context, db *pgxpool.Pool, cfg *config.Confi
 	f = append(f, g05AutovacuumWorkMem(ctx, db)...)
 	f = append(f, g05MultixactWraparound(ctx, db)...)
 	f = append(f, g05PreparedTransactions(ctx, db)...)
+	f = append(f, g05AutovacuumSaturation(ctx, db)...)
+	f = append(f, g05StatsStaleness(ctx, db)...)
 	return f, nil
 }
 
@@ -65,6 +67,9 @@ func g05DatabaseAge(ctx context.Context, db *pgxpool.Pool, cfg *config.Config) [
 				"",
 				"https://www.postgresql.org/docs/current/routine-vacuuming.html#VACUUM-FOR-WRAPAROUND"))
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G05-001", g05, "Database TXID age", "scan error: "+err.Error())}
 	}
 	if len(findings) == 0 {
 		return []Finding{NewOK("G05-001", g05, "Database TXID age",
@@ -101,6 +106,9 @@ func g05TableAge(ctx context.Context, db *pgxpool.Pool, cfg *config.Config) []Fi
 		} else if remaining <= warnThresh {
 			warnLines = append(warnLines, line)
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G05-002", g05, "Table TXID age", "scan error: "+err.Error())}
 	}
 	var findings []Finding
 	if len(critLines) > 0 {
@@ -144,6 +152,9 @@ func g05DeadTupRatio(ctx context.Context, db *pgxpool.Pool) []Finding {
 		pct := dead * 100 / live
 		lines = append(lines, fmt.Sprintf("%s: dead=%d live=%d (%d%%)", tbl, dead, live, pct))
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G05-003", g05, "Dead tuple ratio", "scan error: "+err.Error())}
+	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G05-003", g05, "Dead tuple ratio",
 			"No tables with dead tuple ratio > 20%",
@@ -182,6 +193,9 @@ func g05LastAutovacuum(ctx context.Context, db *pgxpool.Pool) []Finding {
 		}
 		lines = append(lines, fmt.Sprintf("%s: last_autovacuum=%s updates=%d", tbl, age, nUpd))
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G05-004", g05, "Last autovacuum age", "scan error: "+err.Error())}
+	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G05-004", g05, "Last autovacuum age",
 			"All high-write tables vacuumed within 7 days",
@@ -211,6 +225,9 @@ func g05AutovacuumDisabled(ctx context.Context, db *pgxpool.Pool) []Finding {
 		var tbl string
 		_ = rows.Scan(&tbl)
 		tables = append(tables, tbl)
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G05-005", g05, "autovacuum disabled tables", "scan error: "+err.Error())}
 	}
 	if len(tables) == 0 {
 		return []Finding{NewOK("G05-005", g05, "autovacuum disabled tables",
@@ -299,6 +316,9 @@ func g05TableBloat(ctx context.Context, db *pgxpool.Pool) []Finding {
 		lines = append(lines, fmt.Sprintf("%s: size=%dMB est_rows=%d",
 			tbl, totalBytes/1024/1024, estTups))
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G05-009", g05, "Table bloat estimate", "scan error: "+err.Error())}
+	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G05-009", g05, "Table bloat estimate",
 			"No tables show excessive bloat",
@@ -332,6 +352,9 @@ func g05VacuumProgress(ctx context.Context, db *pgxpool.Pool) []Finding {
 		_ = rows.Scan(&pid, &tbl, &ageSecs)
 		lines = append(lines, fmt.Sprintf("PID %d on %s (%dh %dm)",
 			pid, tbl, ageSecs/3600, (ageSecs%3600)/60))
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G05-010", g05, "Long-running vacuum", "scan error: "+err.Error())}
 	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G05-010", g05, "Long-running vacuum",
@@ -395,6 +418,9 @@ func g05MultixactWraparound(ctx context.Context, db *pgxpool.Pool) []Finding {
 			warnLines = append(warnLines, line)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G05-012", g05, "Multixact wraparound age", "scan error: "+err.Error())}
+	}
 	if len(critLines) > 0 {
 		return []Finding{NewCrit("G05-012", g05, "Multixact wraparound age",
 			fmt.Sprintf("Max multixact age: %d — emergency VACUUM FREEZE needed", maxAge),
@@ -440,6 +466,9 @@ func g05PreparedTransactions(ctx context.Context, db *pgxpool.Pool) []Finding {
 		lines = append(lines, fmt.Sprintf("gid=%-30s owner=%-10s db=%-10s age=%s",
 			gid, owner, database, g05FmtDuration(ageSecs)))
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G05-013", g05, "Prepared transactions", "scan error: "+err.Error())}
+	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G05-013", g05, "Prepared transactions",
 			"No prepared transactions found",
@@ -466,4 +495,76 @@ func g05FmtDuration(secs int) string {
 		return fmt.Sprintf("%dm%ds", secs/60, secs%60)
 	}
 	return fmt.Sprintf("%ds", secs)
+}
+
+// G05-014 autovacuum worker saturation
+// When all autovacuum_max_workers slots are in use, new tables that need
+// vacuuming join a queue and wait. On a busy system this means dead tuples
+// accumulate for minutes or hours before being reclaimed.
+func g05AutovacuumSaturation(ctx context.Context, db *pgxpool.Pool) []Finding {
+	var maxWorkers int
+	if err := db.QueryRow(ctx, "SELECT setting::int FROM pg_settings WHERE name='autovacuum_max_workers'").Scan(&maxWorkers); err != nil {
+		return []Finding{NewSkip("G05-014", g05, "Autovacuum worker saturation", err.Error())}
+	}
+	var activeWorkers int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
+		WHERE backend_type = 'autovacuum worker'`).Scan(&activeWorkers); err != nil {
+		return []Finding{NewSkip("G05-014", g05, "Autovacuum worker saturation", err.Error())}
+	}
+	obs := fmt.Sprintf("%d/%d autovacuum workers active", activeWorkers, maxWorkers)
+	if maxWorkers > 0 && activeWorkers >= maxWorkers {
+		return []Finding{NewWarn("G05-014", g05, "Autovacuum worker saturation", obs,
+			"All autovacuum slots are occupied. Consider increasing autovacuum_max_workers.",
+			"New tables needing vacuum will wait until a worker slot is free, allowing dead tuple accumulation.",
+			"https://www.postgresql.org/docs/current/runtime-config-autovacuum.html")}
+	}
+	return []Finding{NewOK("G05-014", g05, "Autovacuum worker saturation", obs,
+		"https://www.postgresql.org/docs/current/runtime-config-autovacuum.html")}
+}
+
+// G05-015 table statistics staleness
+// ANALYZE updates the planner statistics used to choose query plans.
+// Tables with NULL or very old last_analyze are using stale statistics,
+// which causes the planner to make suboptimal index vs sequential scan decisions.
+func g05StatsStaleness(ctx context.Context, db *pgxpool.Pool) []Finding {
+	const q = `SELECT schemaname || '.' || relname AS tbl,
+		EXTRACT(EPOCH FROM (now() - GREATEST(last_analyze, last_autoanalyze)))::int AS age_secs,
+		n_tup_ins + n_tup_upd + n_tup_del AS total_mods
+		FROM pg_stat_user_tables
+		WHERE (n_tup_ins + n_tup_upd + n_tup_del) > 1000
+		AND (
+			(last_analyze IS NULL AND last_autoanalyze IS NULL)
+			OR GREATEST(last_analyze, last_autoanalyze) < now() - interval '7 days'
+		)
+		ORDER BY total_mods DESC LIMIT 15`
+	rows, err := db.Query(ctx, q)
+	if err != nil {
+		return []Finding{NewSkip("G05-015", g05, "Table statistics staleness", err.Error())}
+	}
+	defer rows.Close()
+	var lines []string
+	for rows.Next() {
+		var tbl string
+		var ageSecs *int
+		var mods int64
+		_ = rows.Scan(&tbl, &ageSecs, &mods)
+		age := "never analyzed"
+		if ageSecs != nil {
+			age = g05FmtDuration(*ageSecs) + " ago"
+		}
+		lines = append(lines, fmt.Sprintf("%-50s  last_analyze=%-15s  mods=%d", tbl, age, mods))
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G05-015", g05, "Table statistics staleness", "scan error: "+err.Error())}
+	}
+	if len(lines) == 0 {
+		return []Finding{NewOK("G05-015", g05, "Table statistics staleness",
+			"All high-write tables have been analyzed within 7 days",
+			"https://www.postgresql.org/docs/current/sql-analyze.html")}
+	}
+	return []Finding{NewWarn("G05-015", g05, "Table statistics staleness",
+		fmt.Sprintf("%d high-write table(s) with stale or missing statistics", len(lines)),
+		"Run ANALYZE on these tables; check autovacuum analyze settings.",
+		strings.Join(lines, "\n"),
+		"https://www.postgresql.org/docs/current/sql-analyze.html")}
 }

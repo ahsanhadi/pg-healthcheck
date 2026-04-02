@@ -42,11 +42,11 @@ var (
 // ── helpers ────────────────────────────────────────────────────────────────
 
 type checkResult struct {
-	CheckID   string `json:"check_id"`
-	Severity  string `json:"severity"`
-	Title     string `json:"title"`
-	Observed  string `json:"observed"`
-	NodeName  string `json:"node_name"`
+	CheckID  string `json:"check_id"`
+	Severity string `json:"severity"`
+	Title    string `json:"title"`
+	Observed string `json:"observed"`
+	NodeName string `json:"node_name"`
 }
 
 type report struct {

@@ -39,14 +39,18 @@ DELETE FROM _hc_test.bloat_source WHERE id % 5 != 0;
 
 -- ── G05-013  Prepared transactions ───────────────────────────────────────────
 -- Creates a prepared transaction that will appear in pg_prepared_xacts.
--- NOTE: Must be run outside a transaction block; each PREPARE is a distinct
---       session operation. We use a DO block that cannot contain PREPARE, so
---       this must be done directly.
+-- NOTE: Requires max_prepared_transactions > 0 (default is 0 on many systems).
+--       If this block is skipped, set max_prepared_transactions >= 10 and reload.
 \echo '--- Injecting: G05-013 prepared transaction ---'
+SELECT current_setting('max_prepared_transactions')::int > 0 AS prepared_tx_ok \gset
+\if :prepared_tx_ok
 BEGIN;
 CREATE TABLE IF NOT EXISTS _hc_test.prepared_tx_marker (id int);
 PREPARE TRANSACTION '_hc_test_prepared_tx';
 -- This transaction now sits in pg_prepared_xacts until cleanup.sql rolls it back.
+\else
+\echo 'SKIP G05-013: max_prepared_transactions=0 — run: ALTER SYSTEM SET max_prepared_transactions=10; SELECT pg_reload_conf();'
+\endif
 
 -- ── G06-002  Duplicate indexes ────────────────────────────────────────────────
 \echo '--- Injecting: G06-002 duplicate indexes ---'

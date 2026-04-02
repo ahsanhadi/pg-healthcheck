@@ -127,6 +127,9 @@ func g12SubEnabled(ctx context.Context, db *pgxpool.Pool) []Finding {
 			disabled = append(disabled, name)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G12-002", g12, "Spock subscriptions enabled", "scan error: "+err.Error())}
+	}
 	if len(disabled) > 0 {
 		return []Finding{NewWarn("G12-002", g12, "Spock subscriptions enabled",
 			fmt.Sprintf("%d/%d subscription(s) disabled", len(disabled), total),
@@ -189,6 +192,9 @@ func g12ApplyLag(ctx context.Context, db *pgxpool.Pool) []Finding {
 				warnLines = append(warnLines, fmt.Sprintf("%s: %d MB lag", slot, lagBytes/1024/1024))
 			}
 		}
+		if err := rows.Err(); err != nil {
+			return []Finding{NewSkip("G12-004", g12, "Spock apply lag", "scan error: "+err.Error())}
+		}
 		if len(warnLines) > 0 {
 			return []Finding{NewWarn("G12-004", g12, "Spock apply lag",
 				fmt.Sprintf("%d spock slot(s) lagging > 100 MB", len(warnLines)),
@@ -223,6 +229,9 @@ func g12ApplyLag(ctx context.Context, db *pgxpool.Pool) []Finding {
 			warnLines = append(warnLines, fmt.Sprintf(
 				"%s→%s: %d MB / %ds lag", origin, receiver, lagBytes/1024/1024, lagSecs))
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G12-004", g12, "Spock apply lag", "scan error: "+err.Error())}
 	}
 	if len(warnLines) > 0 {
 		return []Finding{NewWarn("G12-004", g12, "Spock apply lag",
@@ -367,6 +376,9 @@ func g12SpockWALSlots(ctx context.Context, db *pgxpool.Pool) []Finding {
 			inactive = append(inactive, fmt.Sprintf("%s (lag=%dMB)", slot, lagBytes/1024/1024))
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G12-009", g12, "Spock WAL slots", "scan error: "+err.Error())}
+	}
 	if len(inactive) > 0 {
 		return []Finding{NewWarn("G12-009", g12, "Spock WAL slots",
 			fmt.Sprintf("%d/%d spock slot(s) inactive", len(inactive), total),
@@ -452,6 +464,9 @@ func g12ForwardOrigins(ctx context.Context, db *pgxpool.Pool) []Finding {
 		_ = rows.Scan(&name)
 		found = append(found, name)
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G12-015", g12, "Spock forward_origins", "scan error: "+err.Error())}
+	}
 	if len(found) > 0 {
 		return []Finding{NewInfo("G12-015", g12, "Spock forward_origins",
 			fmt.Sprintf("%d subscription(s) have empty forward_origins", len(found)),
@@ -532,6 +547,9 @@ func g12SyncState(ctx context.Context, db *pgxpool.Pool) []Finding {
 			inProgLines = append(inProgLines, line)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G12-017", g12, "Spock sync state", "scan error: "+err.Error())}
+	}
 	if len(errLines) > 0 {
 		return []Finding{NewCrit("G12-017", g12, "Spock sync state",
 			fmt.Sprintf("%d object(s) in error state", len(errLines)),
@@ -599,6 +617,9 @@ func g12LagTracker(ctx context.Context, db *pgxpool.Pool) []Finding {
 		lines = append(lines, fmt.Sprintf("%-15s → %-15s  %d MB  %s",
 			origin, receiver, lagBytes/1024/1024, lagInterval))
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G12-020", g12, "Spock lag tracker", "scan error: "+err.Error())}
+	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G12-020", g12, "Spock lag tracker",
 			"No receivers in lag_tracker (no active inbound replication on this node)",
@@ -628,12 +649,22 @@ func g12QueueDepth(ctx context.Context, db *pgxpool.Pool) []Finding {
 	}
 	obs := fmt.Sprintf("%d message(s) in spock.queue", cnt)
 	if cnt > 0 {
-		obs = fmt.Sprintf("%d message(s) in spock.queue  (oldest: %ds ago)", cnt, oldestSecs)
+		obs = fmt.Sprintf("%d message(s) in spock.queue  (oldest: %s ago)",
+			cnt, g14FmtSecs(oldestSecs))
 	}
+	// WARN if the queue is very deep OR if any message has been sitting for > 1 hour.
+	// A shallow queue with a 15-day-old message is just as indicative of a stuck
+	// subscriber as a deep queue — the count threshold alone misses this case.
 	if cnt > 10000 {
 		return []Finding{NewWarn("G12-021", g12, "Spock queue depth", obs,
 			"Large queue depth suggests subscribers are not consuming messages fast enough.",
 			"Check spock worker status and network connectivity to subscriber nodes.",
+			"https://github.com/pgEdge/spock")}
+	}
+	if cnt > 0 && oldestSecs > 3600 {
+		return []Finding{NewWarn("G12-021", g12, "Spock queue depth", obs,
+			"Messages are accumulating — oldest message is older than 1 hour.",
+			"Spock subscriber may be down, stuck, or unable to connect. Check spock.worker_status.",
 			"https://github.com/pgEdge/spock")}
 	}
 	return []Finding{NewOK("G12-021", g12, "Spock queue depth", obs,
@@ -667,6 +698,9 @@ func g12ChannelStats(ctx context.Context, db *pgxpool.Pool) []Finding {
 		totalDCA += dca
 		lines = append(lines, fmt.Sprintf("%-30s  ins=%-8d upd=%-8d del=%-8d conflicts=%-6d dca=%d",
 			subName, ins, upd, del, conflicts, dca))
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G12-022", g12, "Spock channel conflict stats", "scan error: "+err.Error())}
 	}
 	if len(lines) == 0 {
 		return []Finding{NewInfo("G12-022", g12, "Spock channel conflict stats",
@@ -718,6 +752,9 @@ func g12ReplicationProgress(ctx context.Context, db *pgxpool.Pool) []Finding {
 		}
 		lines = append(lines, fmt.Sprintf("%-12s → %-12s  lag=%d MB  last_commit=%s",
 			remote, local, lagBytes/1024/1024, commitTs))
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G12-023", g12, "Spock replication progress", "scan error: "+err.Error())}
 	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G12-023", g12, "Spock replication progress",

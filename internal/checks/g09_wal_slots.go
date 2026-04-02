@@ -61,6 +61,9 @@ func g09InactiveSlots(ctx context.Context, db *pgxpool.Pool, cfg *config.Config)
 			warnLines = append(warnLines, line)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G09-001", g09, "Inactive replication slot lag", "scan error: "+err.Error())}
+	}
 	var findings []Finding
 	if len(critLines) > 0 {
 		findings = append(findings, NewCrit("G09-001", g09, "Inactive replication slot lag",
@@ -107,6 +110,9 @@ func g09RetainedWALPerSlot(ctx context.Context, db *pgxpool.Pool, cfg *config.Co
 		} else if retainedGB >= int64(cfg.WALSlotWarnGB) {
 			warnLines = append(warnLines, line)
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G09-002", g09, "Retained WAL per slot", "scan error: "+err.Error())}
 	}
 	var findings []Finding
 	if len(critLines) > 0 {
@@ -178,6 +184,9 @@ func g09ReplLagBytes(ctx context.Context, db *pgxpool.Pool, cfg *config.Config) 
 			warnLines = append(warnLines, line)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G09-004", g09, "Replication lag (pg_stat_replication)", "scan error: "+err.Error())}
+	}
 	if !anyReplica {
 		return []Finding{NewOK("G09-004", g09, "Replication lag (pg_stat_replication)",
 			"No streaming replicas connected",
@@ -226,6 +235,9 @@ func g09UnnamedStandbys(ctx context.Context, db *pgxpool.Pool) []Finding {
 			ip = *addr
 		}
 		lines = append(lines, fmt.Sprintf("PID %d from %s", pid, ip))
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G09-005", g09, "Unnamed standbys", "scan error: "+err.Error())}
 	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G09-005", g09, "Unnamed standbys",
@@ -329,6 +341,9 @@ func g09InvalidatedSlots(ctx context.Context, db *pgxpool.Pool) []Finding {
 		_ = rows.Scan(&name, &slotType, &reason)
 		lines = append(lines, fmt.Sprintf("%s (%s): reason=%s", name, slotType, reason))
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G09-009", g09, "Invalidated replication slots", "scan error: "+err.Error())}
+	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G09-009", g09, "Invalidated replication slots",
 			"No invalidated slots",
@@ -410,6 +425,9 @@ func g09InactiveLogicalSlots(ctx context.Context, db *pgxpool.Pool, cfg *config.
 			infoLines = append(infoLines, line)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G09-011", g09, "Inactive logical slots", "scan error: "+err.Error())}
+	}
 
 	if len(critLines)+len(warnLines)+len(infoLines) == 0 {
 		return []Finding{NewOK("G09-011", g09, "Inactive logical slots",
@@ -484,6 +502,9 @@ func g09LogicalWorkerStatus(ctx context.Context, db *pgxpool.Pool) []Finding {
 		if pid == nil {
 			dead = append(dead, fmt.Sprintf("%s — worker not running (pid IS NULL)", subname))
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G09-012", g09, "Logical replication worker status", "scan error: "+err.Error())}
 	}
 
 	// PG 15+: check pg_stat_subscription_stats for accumulated errors
@@ -594,6 +615,9 @@ func g09SubscriptionRelState(ctx context.Context, db *pgxpool.Pool) []Finding {
 			inProgress = append(inProgress, line)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G09-013", g09, "Subscription table sync state", "scan error: "+err.Error())}
+	}
 
 	if total == 0 {
 		return []Finding{NewOK("G09-013", g09, "Subscription table sync state",
@@ -663,6 +687,9 @@ func g09StreamingLagTime(ctx context.Context, db *pgxpool.Pool) []Finding {
 		default:
 			okLines = append(okLines, line)
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G09-014", g09, "Streaming replication lag (time)", "scan error: "+err.Error())}
 	}
 
 	all := append(append(critLines, warnLines...), okLines...)

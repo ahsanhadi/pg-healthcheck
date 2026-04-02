@@ -34,6 +34,7 @@ func (g *G03Performance) Run(ctx context.Context, db *pgxpool.Pool, cfg *config.
 	f = append(f, g03WALBuffers(ctx, db)...)
 	f = append(f, g03DefaultStatisticsTarget(ctx, db)...)
 	f = append(f, g03TempFiles(ctx, db)...)
+	f = append(f, g03CacheHitRatio(ctx, db)...)
 	return f, nil
 }
 
@@ -322,6 +323,40 @@ func g03DefaultStatisticsTarget(ctx context.Context, db *pgxpool.Pool) []Finding
 	}
 	return []Finding{NewOK("G03-014", g03, "default_statistics_target", obs,
 		"https://www.postgresql.org/docs/current/runtime-config-query.html")}
+}
+
+// G03-016 database cache hit ratio from pg_stat_database
+// Uses blks_hit and blks_read from pg_stat_database for a cluster-wide view.
+// A cache hit ratio below 95% on an OLTP system usually means shared_buffers
+// is too small or the working set exceeds available memory.
+func g03CacheHitRatio(ctx context.Context, db *pgxpool.Pool) []Finding {
+	const q = `SELECT sum(blks_hit), sum(blks_read) FROM pg_stat_database`
+	var hits, reads int64
+	if err := db.QueryRow(ctx, q).Scan(&hits, &reads); err != nil {
+		return []Finding{NewSkip("G03-016", g03, "Database cache hit ratio", err.Error())}
+	}
+	total := hits + reads
+	if total == 0 {
+		return []Finding{NewOK("G03-016", g03, "Database cache hit ratio",
+			"No I/O data yet",
+			"https://www.postgresql.org/docs/current/monitoring-stats.html")}
+	}
+	pct := hits * 100 / total
+	obs := fmt.Sprintf("Cache hit ratio: %d%%  (%d hits / %d total accesses)", pct, hits, total)
+	if pct < 90 {
+		return []Finding{NewWarn("G03-016", g03, "Database cache hit ratio", obs,
+			"Increase shared_buffers (typically 25% of RAM) to reduce disk I/O.",
+			"Cache hit ratio below 90% means frequent disk reads which degrade query performance.",
+			"https://www.postgresql.org/docs/current/runtime-config-resource.html")}
+	}
+	if pct < 95 {
+		return []Finding{NewInfo("G03-016", g03, "Database cache hit ratio", obs,
+			"Consider increasing shared_buffers if the working set fits in RAM.",
+			"Ideal cache hit ratio for OLTP workloads is 95%+.",
+			"https://www.postgresql.org/docs/current/runtime-config-resource.html")}
+	}
+	return []Finding{NewOK("G03-016", g03, "Database cache hit ratio", obs,
+		"https://www.postgresql.org/docs/current/runtime-config-resource.html")}
 }
 
 // G03-015 SUM(temp_files) > 1000 or SUM(temp_bytes) > 10 GB

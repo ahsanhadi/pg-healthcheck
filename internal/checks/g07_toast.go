@@ -88,6 +88,9 @@ func g07TOASTReferences(ctx context.Context, db *pgxpool.Pool) []Finding {
 		_ = rows.Scan(&tbl, &toastOid)
 		lines = append(lines, fmt.Sprintf("%s (toast oid=%d missing)", tbl, toastOid))
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G07-003", g07, "TOAST reference integrity", "scan error: "+err.Error())}
+	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G07-003", g07, "TOAST reference integrity",
 			"All reltoastrelid references are valid",
@@ -120,6 +123,9 @@ func g07OrphanedTOAST(ctx context.Context, db *pgxpool.Pool) []Finding {
 		var tbl string
 		_ = rows.Scan(&tbl)
 		lines = append(lines, tbl)
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G07-005", g07, "Orphaned TOAST tables", "scan error: "+err.Error())}
 	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G07-005", g07, "Orphaned TOAST tables",
@@ -158,6 +164,9 @@ func g07TOASTSize(ctx context.Context, db *pgxpool.Pool) []Finding {
 		_ = rows.Scan(&tbl, &main, &toast)
 		lines = append(lines, fmt.Sprintf("%s: main=%dMB toast=%dMB (%.1fx)",
 			tbl, main/1024/1024, toast/1024/1024, float64(toast)/float64(main)))
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G07-006", g07, "TOAST size vs main table", "scan error: "+err.Error())}
 	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G07-006", g07, "TOAST size vs main table",

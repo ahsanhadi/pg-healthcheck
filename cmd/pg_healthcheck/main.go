@@ -30,6 +30,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// version information is injected at build time by GoReleaser via -ldflags.
+// When building locally without GoReleaser these remain at their default values.
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 // ── CLI flags ────────────────────────────────────────────────────────────────
 
 var (
@@ -73,8 +81,9 @@ var spockChecker = &checks.G12SpockCluster{}
 
 func main() {
 	root := &cobra.Command{
-		Use:   "pg_healthcheck",
-		Short: "Enterprise PostgreSQL health diagnostics",
+		Use:     "pg_healthcheck",
+		Short:   "Enterprise PostgreSQL health diagnostics",
+		Version: version + " (commit=" + commit + " built=" + date + ")",
 		Long: `pg_healthcheck runs 90+ checks across 13 groups against a single PostgreSQL
 instance or a pgEdge multi-node distributed cluster.
 

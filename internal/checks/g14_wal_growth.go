@@ -345,6 +345,9 @@ func g14TopWALRelations(ctx context.Context, db *pgxpool.Pool) []Finding {
 		_ = rows.Scan(&tbl, &mods)
 		lines = append(lines, fmt.Sprintf("%-50s  %d modifications", tbl, mods))
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G14-006", g14, "Top WAL-generating tables", "scan error: "+err.Error())}
+	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G14-006", g14, "Top WAL-generating tables",
 			"No table statistics available yet",
@@ -495,6 +498,9 @@ func g14UnloggedTables(ctx context.Context, db *pgxpool.Pool) []Finding {
 		_ = rows.Scan(&t)
 		tables = append(tables, t)
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G14-011", g14, "UNLOGGED tables advisory", "scan error: "+err.Error())}
+	}
 	if len(tables) == 0 {
 		return []Finding{NewOK("G14-011", g14, "UNLOGGED tables advisory",
 			"No UNLOGGED tables found",
@@ -547,9 +553,10 @@ func g14WALFilesystemPct(ctx context.Context, db *pgxpool.Pool, cfg *config.Conf
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(walPath, &stat); err != nil {
 		return []Finding{NewInfo("G14-013", g14, "pg_wal filesystem usage",
-			fmt.Sprintf("Cannot stat %s: %v", walPath, err),
-			"Ensure the healthcheck binary runs on the same host as PostgreSQL.",
-			"", "")}
+			fmt.Sprintf("pg_wal filesystem check requires local execution (path: %s)", walPath),
+			"Run pg_healthcheck directly on the PostgreSQL host — not via a remote connection.",
+			fmt.Sprintf("syscall.Statfs error: %v", err),
+			"https://www.postgresql.org/docs/current/wal-configuration.html")}
 	}
 
 	// Bsize is int32 on Darwin, int64 on Linux — casting to uint64 is safe for positive values
@@ -615,6 +622,9 @@ func g14LongTxWALRetain(ctx context.Context, db *pgxpool.Pool) []Finding {
 		var t txRow
 		_ = rows.Scan(&t.pid, &t.user, &t.app, &t.state, &t.ageSecs)
 		txs = append(txs, t)
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G14-014", g14, "Long transactions blocking WAL recycle", "scan error: "+err.Error())}
 	}
 
 	if len(txs) == 0 {

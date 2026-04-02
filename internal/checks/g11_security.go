@@ -48,6 +48,9 @@ func g11SuperusersNoPassword(ctx context.Context, db *pgxpool.Pool) []Finding {
 		_ = rows.Scan(&name)
 		found = append(found, name)
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G11-001", g11, "Superusers without password", "scan error: "+err.Error())}
+	}
 	if len(found) > 0 {
 		return []Finding{NewCrit("G11-001", g11, "Superusers without password",
 			fmt.Sprintf("%d superuser(s) have no password: %s", len(found), strings.Join(found, ", ")),
@@ -118,6 +121,9 @@ func g11PrivilegedRoles(ctx context.Context, db *pgxpool.Pool) []Finding {
 		var name, privs string
 		_ = rows.Scan(&name, &privs)
 		lines = append(lines, fmt.Sprintf("%s: %s", name, strings.TrimSpace(privs)))
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G11-004", g11, "Privileged non-superuser roles", "scan error: "+err.Error())}
 	}
 	if len(lines) > 0 {
 		return []Finding{NewInfo("G11-004", g11, "Privileged non-superuser roles",
@@ -218,6 +224,9 @@ func g11SuperuserCount(ctx context.Context, db *pgxpool.Pool) []Finding {
 		var name string
 		_ = rows.Scan(&name)
 		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G11-009", g11, "Superuser login count", "scan error: "+err.Error())}
 	}
 	if len(names) == 0 {
 		return []Finding{NewOK("G11-009", g11, "Superuser login count",

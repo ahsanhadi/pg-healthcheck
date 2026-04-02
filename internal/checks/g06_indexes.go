@@ -57,6 +57,9 @@ func g06UnusedIndexes(ctx context.Context, db *pgxpool.Pool) []Finding {
 		lines = append(lines, fmt.Sprintf("%s.%s (%dMB)", tbl, idx, bytes/1024/1024))
 		totalBytes += bytes
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G06-001", g06, "Unused indexes", "scan error: "+err.Error())}
+	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G06-001", g06, "Unused indexes",
 			"No unused non-unique indexes found (> 1MB)",
@@ -98,6 +101,9 @@ func g06DuplicateIndexes(ctx context.Context, db *pgxpool.Pool) []Finding {
 		_ = rows.Scan(&names, &schema, &tbl)
 		lines = append(lines, fmt.Sprintf("%s.%s: [%s]", schema, tbl, names))
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G06-002", g06, "Duplicate indexes", "scan error: "+err.Error())}
+	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G06-002", g06, "Duplicate indexes",
 			"No duplicate indexes found",
@@ -130,6 +136,9 @@ func g06InvalidIndexes(ctx context.Context, db *pgxpool.Pool) []Finding {
 		var tbl, idx string
 		_ = rows.Scan(&tbl, &idx)
 		lines = append(lines, fmt.Sprintf("%s: %s", tbl, idx))
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G06-003", g06, "Invalid indexes", "scan error: "+err.Error())}
 	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G06-003", g06, "Invalid indexes",
@@ -169,6 +178,9 @@ func g06BloatedIndexes(ctx context.Context, db *pgxpool.Pool) []Finding {
 		lines = append(lines, fmt.Sprintf("%s.%s: %dMB for %d rows",
 			tbl, idx, bytes/1024/1024, live))
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G06-004", g06, "Bloated indexes", "scan error: "+err.Error())}
+	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G06-004", g06, "Bloated indexes",
 			"No significantly bloated indexes detected",
@@ -207,6 +219,9 @@ func g06FKWithoutIndex(ctx context.Context, db *pgxpool.Pool) []Finding {
 		_ = rows.Scan(&tbl, &cols)
 		lines = append(lines, fmt.Sprintf("%s (%s)", tbl, cols))
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G06-005", g06, "FK columns without index", "scan error: "+err.Error())}
+	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G06-005", g06, "FK columns without index",
 			"All foreign key columns have supporting indexes",
@@ -241,6 +256,9 @@ func g06PrefixRedundantIndexes(ctx context.Context, db *pgxpool.Pool) []Finding 
 		var schema, tbl, shorter, longer string
 		_ = rows.Scan(&schema, &tbl, &shorter, &longer)
 		lines = append(lines, fmt.Sprintf("%s.%s: %s is prefix of %s", schema, tbl, shorter, longer))
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G06-006", g06, "Prefix-redundant indexes", "scan error: "+err.Error())}
 	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G06-006", g06, "Prefix-redundant indexes",
@@ -277,6 +295,9 @@ func g06LowCardinalityIndexes(ctx context.Context, db *pgxpool.Pool) []Finding {
 		_ = rows.Scan(&tbl, &col, &ndistinct)
 		lines = append(lines, fmt.Sprintf("%s.%s (n_distinct=%.4f)", tbl, col, ndistinct))
 	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G06-007", g06, "Low-cardinality indexed columns", "scan error: "+err.Error())}
+	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G06-007", g06, "Low-cardinality indexed columns",
 			"No low-cardinality indexed columns detected",
@@ -312,6 +333,9 @@ func g06BRINCorrelation(ctx context.Context, db *pgxpool.Pool) []Finding {
 		var corr float64
 		_ = rows.Scan(&tbl, &col, &corr, &idx)
 		lines = append(lines, fmt.Sprintf("%s.%s corr=%.3f idx=%s", tbl, col, corr, idx))
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G06-008", g06, "BRIN index correlation", "scan error: "+err.Error())}
 	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G06-008", g06, "BRIN index correlation",
@@ -372,6 +396,9 @@ func g06TablesWithoutPK(ctx context.Context, db *pgxpool.Pool) []Finding {
 		var tbl, sz string
 		_ = rows.Scan(&tbl, &sz)
 		lines = append(lines, fmt.Sprintf("%-50s  %s", tbl, sz))
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip("G06-010", g06, "Tables without primary key", "scan error: "+err.Error())}
 	}
 	if len(lines) == 0 {
 		return []Finding{NewOK("G06-010", g06, "Tables without primary key",
