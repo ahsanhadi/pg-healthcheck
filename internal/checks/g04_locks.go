@@ -3,6 +3,7 @@ package checks
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -132,41 +133,173 @@ func g04IdleInTxAge(ctx context.Context, db *pgxpool.Pool, cfg *config.Config) [
 
 // G04-003 lock blocker chains
 func g04LockBlockerChains(ctx context.Context, db *pgxpool.Pool) []Finding {
-	const q = `SELECT blocked.pid, blocked.usename, blocking.pid AS blocker_pid,
-		blocking.usename AS blocker_user,
-		EXTRACT(EPOCH FROM (now() - blocked.query_start))::int AS wait_secs,
-		left(blocked.query, 80) AS query
-		FROM pg_stat_activity blocked
-		JOIN pg_locks bl ON bl.pid = blocked.pid AND NOT bl.granted
-		JOIN pg_locks kl ON kl.transactionid = bl.transactionid AND kl.granted
-		JOIN pg_stat_activity blocking ON blocking.pid = kl.pid
-		ORDER BY wait_secs DESC LIMIT 10`
+	const q = `SELECT blocked.pid,
+	                  blocked.usename,
+	                  blocked.application_name,
+	                  blocking.pid AS blocker_pid,
+	                  blocking.usename AS blocker_user,
+	                  blocking.application_name AS blocker_app,
+	                  EXTRACT(EPOCH FROM (now() - blocked.query_start))::int AS wait_secs
+	           FROM pg_stat_activity blocked
+	           CROSS JOIN LATERAL unnest(pg_blocking_pids(blocked.pid)) AS bp(blocker_pid)
+	           JOIN pg_stat_activity blocking ON blocking.pid = bp.blocker_pid
+	           WHERE blocked.backend_type = 'client backend'
+	             AND blocked.wait_event_type = 'Lock'
+	           ORDER BY wait_secs DESC LIMIT 50`
 	rows, err := db.Query(ctx, q)
 	if err != nil {
 		return []Finding{NewSkip("G04-003", g04, "Lock blocker chains", err.Error())}
 	}
 	defer rows.Close()
-	var lines []string
+
+	type waiterAgg struct {
+		user     string
+		app      string
+		sessions int
+		totalSec int
+		maxSec   int
+		pids     map[int]struct{}
+	}
+	type blockerAgg struct {
+		user       string
+		app        string
+		victims    int
+		totalSec   int
+		blockerPIDs map[int]struct{}
+	}
+
+	waiters := make(map[string]*waiterAgg)
+	blockers := make(map[string]*blockerAgg)
+
 	for rows.Next() {
 		var pid, blockerPid, waitSecs int
-		var user, blockerUser, query string
-		_ = rows.Scan(&pid, &user, &blockerPid, &blockerUser, &waitSecs, &query)
-		lines = append(lines, fmt.Sprintf("PID %d (%s) blocked by PID %d (%s) for %ds: %s",
-			pid, user, blockerPid, blockerUser, waitSecs, query))
+		var user, blockedApp, blockerUser, blockerApp string
+		_ = rows.Scan(&pid, &user, &blockedApp, &blockerPid, &blockerUser, &blockerApp, &waitSecs)
+
+		// Lock diagnostics are grouped by role + application_name so teams can
+		// identify which service/account is causing impact quickly.
+		blockedApp = g04NormalizeAppName(blockedApp)
+		blockerApp = g04NormalizeAppName(blockerApp)
+
+		waiterKey := user + "\x00" + blockedApp
+		w, ok := waiters[waiterKey]
+		if !ok {
+			w = &waiterAgg{user: user, app: blockedApp, pids: make(map[int]struct{})}
+			waiters[waiterKey] = w
+		}
+		w.sessions++
+		w.totalSec += waitSecs
+		if waitSecs > w.maxSec {
+			w.maxSec = waitSecs
+		}
+		w.pids[pid] = struct{}{}
+
+		blockerKey := blockerUser + "\x00" + blockerApp
+		b, ok := blockers[blockerKey]
+		if !ok {
+			b = &blockerAgg{user: blockerUser, app: blockerApp, blockerPIDs: make(map[int]struct{})}
+			blockers[blockerKey] = b
+		}
+		b.victims++
+		b.totalSec += waitSecs
+		b.blockerPIDs[blockerPid] = struct{}{}
 	}
 	if err := rows.Err(); err != nil {
 		return []Finding{NewSkip("G04-003", g04, "Lock blocker chains", "scan error: "+err.Error())}
 	}
-	if len(lines) == 0 {
+	if len(waiters) == 0 {
 		return []Finding{NewOK("G04-003", g04, "Lock blocker chains",
 			"No lock blocking detected",
 			"https://www.postgresql.org/docs/current/view-pg-locks.html")}
 	}
+
+	var waiterList []*waiterAgg
+	for _, w := range waiters {
+		waiterList = append(waiterList, w)
+	}
+	sort.Slice(waiterList, func(i, j int) bool {
+		if waiterList[i].totalSec != waiterList[j].totalSec {
+			return waiterList[i].totalSec > waiterList[j].totalSec
+		}
+		if waiterList[i].sessions != waiterList[j].sessions {
+			return waiterList[i].sessions > waiterList[j].sessions
+		}
+		if waiterList[i].user != waiterList[j].user {
+			return waiterList[i].user < waiterList[j].user
+		}
+		return waiterList[i].app < waiterList[j].app
+	})
+
+	var blockerList []*blockerAgg
+	for _, b := range blockers {
+		blockerList = append(blockerList, b)
+	}
+	sort.Slice(blockerList, func(i, j int) bool {
+		if blockerList[i].totalSec != blockerList[j].totalSec {
+			return blockerList[i].totalSec > blockerList[j].totalSec
+		}
+		if blockerList[i].victims != blockerList[j].victims {
+			return blockerList[i].victims > blockerList[j].victims
+		}
+		if blockerList[i].user != blockerList[j].user {
+			return blockerList[i].user < blockerList[j].user
+		}
+		return blockerList[i].app < blockerList[j].app
+	})
+
+	var detail []string
+	totalBlockedSessions := 0
+	for _, w := range waiterList {
+		totalBlockedSessions += w.sessions
+	}
+	detail = append(detail, "Top waiting groups (role/app):")
+	for i, w := range waiterList {
+		if i == 5 {
+			break
+		}
+		detail = append(detail, fmt.Sprintf(
+			"waiter role=%s app=%s blocked_sessions=%d total_wait=%ds max_wait=%ds waiter_pids=%s",
+			w.user, w.app, w.sessions, w.totalSec, w.maxSec, g04FormatPIDSet(w.pids)))
+	}
+	detail = append(detail, "Top blocker groups (role/app):")
+	for i, b := range blockerList {
+		if i == 5 {
+			break
+		}
+		detail = append(detail, fmt.Sprintf(
+			"blocker role=%s app=%s blocked_victims=%d cumulative_victim_wait=%ds blocker_pids=%s",
+			b.user, b.app, b.victims, b.totalSec, g04FormatPIDSet(b.blockerPIDs)))
+	}
+
 	return []Finding{NewWarn("G04-003", g04, "Lock blocker chains",
-		fmt.Sprintf("%d blocked session(s)", len(lines)),
+		fmt.Sprintf("%d blocked session(s)", totalBlockedSessions),
 		"Investigate blocker PIDs; consider pg_cancel_backend() on blockers.",
-		strings.Join(lines, "\n"),
+		strings.Join(detail, "\n"),
 		"https://www.postgresql.org/docs/current/view-pg-locks.html")}
+}
+
+func g04NormalizeAppName(app string) string {
+	app = strings.TrimSpace(app)
+	if app == "" {
+		return "(unset)"
+	}
+	return app
+}
+
+func g04FormatPIDSet(in map[int]struct{}) string {
+	if len(in) == 0 {
+		return "-"
+	}
+	pids := make([]int, 0, len(in))
+	for pid := range in {
+		pids = append(pids, pid)
+	}
+	sort.Ints(pids)
+	out := make([]string, 0, len(pids))
+	for _, pid := range pids {
+		out = append(out, fmt.Sprintf("%d", pid))
+	}
+	return strings.Join(out, ",")
 }
 
 // G04-004 deadlock count from pg_stat_database

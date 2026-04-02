@@ -22,6 +22,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -46,6 +49,7 @@ type checkResult struct {
 	Severity string `json:"severity"`
 	Title    string `json:"title"`
 	Observed string `json:"observed"`
+	Detail   string `json:"detail"`
 	NodeName string `json:"node_name"`
 }
 
@@ -69,7 +73,15 @@ func runHealthcheck(t *testing.T, extraArgs ...string) map[string]checkResult {
 	}
 	args = append(args, extraArgs...)
 
-	cmd := exec.Command(*binary, args...)
+	binPath, err := filepath.Abs(*binary)
+	if err != nil {
+		t.Fatalf("failed to resolve binary path %q: %v", *binary, err)
+	}
+	cmd := exec.Command(binPath, args...)
+	// Run from repo root so default ./healthcheck.yaml is picked up.
+	// Running from tests/ leaves cfg.CheckTimeout at zero (no YAML load),
+	// causing near-immediate context deadline exceeded in many checks.
+	cmd.Dir = ".."
 	out, _ := cmd.Output() // non-zero exit is expected when there are WARNs/CRITs
 
 	var r report
@@ -138,6 +150,9 @@ func teardown(t *testing.T, pool *pgxpool.Pool) {
 	                WHERE EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name='_hc_test_inactive_slot')`)
 	// Drop test superuser
 	pool.Exec(ctx, `DROP ROLE IF EXISTS _hc_test_super`)
+	// Drop lock-diagnostic test roles
+	pool.Exec(ctx, `DROP ROLE IF EXISTS _hc_test_blocker`)
+	pool.Exec(ctx, `DROP ROLE IF EXISTS _hc_test_waiter`)
 	// Revoke public schema create
 	pool.Exec(ctx, `REVOKE CREATE ON SCHEMA public FROM PUBLIC`)
 	// Drop all test objects
@@ -387,4 +402,181 @@ func TestAllChecksPresent(t *testing.T) {
 	start := time.Now()
 	_ = runHealthcheck(t)
 	t.Logf("Full run time: %v", time.Since(start))
+}
+
+// TestG04_LockRoleAppDiagnostics verifies G04-003 groups lock contention by
+// role + application_name and emits redacted summary details.
+func TestG04_LockRoleAppDiagnostics(t *testing.T) {
+	pool := db(t)
+	defer pool.Close()
+	setupSchema(t, pool)
+	defer teardown(t, pool)
+
+	mustExec(t, pool, `CREATE TABLE _hc_test.lock_diag(id int PRIMARY KEY)`)
+	mustExec(t, pool, `INSERT INTO _hc_test.lock_diag VALUES (1)`)
+
+	mustExec(t, pool, `DROP ROLE IF EXISTS _hc_test_blocker`)
+	mustExec(t, pool, `DROP ROLE IF EXISTS _hc_test_waiter`)
+	mustExec(t, pool, `CREATE ROLE _hc_test_blocker LOGIN PASSWORD 'hc_blocker_pw'`)
+	mustExec(t, pool, `CREATE ROLE _hc_test_waiter LOGIN PASSWORD 'hc_waiter_pw'`)
+	mustExec(t, pool, `GRANT USAGE ON SCHEMA _hc_test TO _hc_test_blocker, _hc_test_waiter`)
+	// ACCESS EXCLUSIVE lock test needs stronger relation privileges than SELECT.
+	mustExec(t, pool, `GRANT ALL PRIVILEGES ON _hc_test.lock_diag TO _hc_test_blocker, _hc_test_waiter`)
+
+	blockerDSN := fmt.Sprintf(
+		"host=%s port=%d dbname=%s user=%s password=%s application_name=%s pool_max_conns=1",
+		*pgHost, *pgPort, *pgDBName, "_hc_test_blocker", "hc_blocker_pw", "hc_blocker_app",
+	)
+	// Intentionally do NOT set application_name here; should normalize to "(unset)".
+	waiterDSN := fmt.Sprintf(
+		"host=%s port=%d dbname=%s user=%s password=%s pool_max_conns=1",
+		*pgHost, *pgPort, *pgDBName, "_hc_test_waiter", "hc_waiter_pw",
+	)
+
+	blockerPool, err := pgxpool.New(context.Background(), blockerDSN)
+	if err != nil {
+		t.Fatalf("blocker connect: %v", err)
+	}
+	defer blockerPool.Close()
+	waiterPool, err := pgxpool.New(context.Background(), waiterDSN)
+	if err != nil {
+		t.Fatalf("waiter connect: %v", err)
+	}
+	defer waiterPool.Close()
+
+	ctx := context.Background()
+	blockerConn, err := blockerPool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire blocker conn: %v", err)
+	}
+	defer blockerConn.Release()
+	if _, err := blockerConn.Exec(ctx, `BEGIN`); err != nil {
+		t.Fatalf("blocker BEGIN failed: %v", err)
+	}
+	if _, err := blockerConn.Exec(ctx, `LOCK TABLE _hc_test.lock_diag IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatalf("blocker LOCK failed: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	waiterDone := make(chan error, 1)
+	go func() {
+		defer wg.Done()
+		waiterConn, err := waiterPool.Acquire(ctx)
+		if err != nil {
+			waiterDone <- err
+			return
+		}
+		defer waiterConn.Release()
+		_, err = waiterConn.Exec(ctx, `BEGIN`)
+		if err != nil {
+			waiterDone <- err
+			return
+		}
+		_, err = waiterConn.Exec(ctx, `LOCK TABLE _hc_test.lock_diag IN ACCESS SHARE MODE`)
+		if err == nil {
+			_, _ = waiterConn.Exec(ctx, `ROLLBACK`)
+		}
+		waiterDone <- err
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var waiting int
+		if err := pool.QueryRow(context.Background(), `
+			SELECT count(*) FROM pg_stat_activity
+			WHERE usename = '_hc_test_waiter'
+			  AND wait_event_type = 'Lock'`).Scan(&waiting); err != nil {
+			t.Fatalf("lock wait probe failed: %v", err)
+		}
+		if waiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("waiter did not enter lock wait state in time")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	var c checkResult
+	var got bool
+	for attempt := 1; attempt <= 5; attempt++ {
+		// Ensure the waiter is still blocked right before invoking healthcheck.
+		var blockedNow int
+		if err := pool.QueryRow(context.Background(), `
+			SELECT count(*)
+			FROM pg_stat_activity
+			WHERE usename = '_hc_test_waiter'
+			  AND wait_event_type = 'Lock'
+			  AND cardinality(pg_blocking_pids(pid)) > 0`).Scan(&blockedNow); err != nil {
+			t.Fatalf("lock wait probe before healthcheck failed: %v", err)
+		}
+		if blockedNow == 0 {
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+
+		results := runHealthcheck(t, "--groups", "G04")
+		var ok bool
+		c, ok = results["G04-003"]
+		if !ok {
+			t.Fatalf("G04-003 not found in output on attempt %d", attempt)
+		}
+		if c.Severity == "WARN" {
+			got = true
+			break
+		}
+		// Small retry window to avoid race with lock state transition timing.
+		time.Sleep(200 * time.Millisecond)
+	}
+	if !got {
+		t.Fatalf("G04-003 severity: got %s want WARN (observed: %s)", c.Severity, c.Observed)
+	}
+	if !strings.Contains(c.Detail, "Top waiting groups (role/app):") {
+		t.Fatalf("G04-003 detail missing waiting summary: %q", c.Detail)
+	}
+	if !strings.Contains(c.Detail, "Top blocker groups (role/app):") {
+		t.Fatalf("G04-003 detail missing blocker summary: %q", c.Detail)
+	}
+	if !strings.Contains(c.Detail, "waiter role=_hc_test_waiter") {
+		t.Fatalf("G04-003 detail missing waiter role mapping: %q", c.Detail)
+	}
+	if !strings.Contains(c.Detail, "blocker role=_hc_test_blocker") {
+		t.Fatalf("G04-003 detail missing blocker role mapping: %q", c.Detail)
+	}
+	if !strings.Contains(c.Detail, "app=(unset)") {
+		t.Fatalf("G04-003 detail missing app normalization '(unset)': %q", c.Detail)
+	}
+	if strings.Contains(strings.ToLower(c.Detail), "lock table") || strings.Contains(strings.ToLower(c.Detail), "select ") {
+		t.Fatalf("G04-003 detail appears to contain SQL text, expected redacted summary only: %q", c.Detail)
+	}
+
+	// Unblock and clean up waiter transaction.
+	if _, err := blockerConn.Exec(ctx, `ROLLBACK`); err != nil {
+		t.Fatalf("blocker ROLLBACK failed: %v", err)
+	}
+	if err := <-waiterDone; err != nil {
+		t.Fatalf("waiter lock statement returned error: %v", err)
+	}
+	wg.Wait()
+}
+
+// TestG04_NoLockBlockingPath verifies the existing no-contention behavior
+// remains intact and does not emit summary detail noise.
+func TestG04_NoLockBlockingPath(t *testing.T) {
+	results := runHealthcheck(t, "--groups", "G04")
+	c, ok := results["G04-003"]
+	if !ok {
+		t.Fatal("G04-003 not found in output")
+	}
+	// Shared test environments may have ambient lock contention.
+	if c.Severity != "OK" {
+		t.Skipf("environment has active lock contention; skipping no-contention assertion (%s: %s)", c.Severity, c.Observed)
+	}
+	if c.Observed != "No lock blocking detected" {
+		t.Fatalf("unexpected G04-003 observed in OK path: %q", c.Observed)
+	}
+	if strings.TrimSpace(c.Detail) != "" {
+		t.Fatalf("expected empty detail in no-contention path, got: %q", c.Detail)
+	}
 }
