@@ -19,6 +19,9 @@ func (g *G03Performance) GroupID() string { return "G03" }
 
 func (g *G03Performance) Run(ctx context.Context, db *pgxpool.Pool, cfg *config.Config) ([]Finding, error) {
 	var f []Finding
+	// Sample pg_stat_io once (PG 16+ only) and share the result with the two
+	// checks that benefit from real I/O latency data.
+	io := g03SampleIO(ctx, db)
 	f = append(f, g03SharedBuffers(ctx, db)...)
 	f = append(f, g03WorkMem(ctx, db)...)
 	f = append(f, g03MaintenanceWorkMem(ctx, db)...)
@@ -28,14 +31,66 @@ func (g *G03Performance) Run(ctx context.Context, db *pgxpool.Pool, cfg *config.
 	f = append(f, g03CheckpointCompletionTarget(ctx, db)...)
 	f = append(f, g03CheckpointRatio(ctx, db)...)
 	f = append(f, g03WALCompression(ctx, db)...)
-	f = append(f, g03RandomPageCost(ctx, db)...)
-	f = append(f, g03EffectiveIOConcurrency(ctx, db)...)
+	f = append(f, g03RandomPageCost(ctx, db, io)...)
+	f = append(f, g03EffectiveIOConcurrency(ctx, db, io)...)
 	f = append(f, g03JITOverhead(ctx, db)...)
 	f = append(f, g03WALBuffers(ctx, db)...)
 	f = append(f, g03DefaultStatisticsTarget(ctx, db)...)
 	f = append(f, g03TempFiles(ctx, db)...)
 	f = append(f, g03CacheHitRatio(ctx, db)...)
 	return f, nil
+}
+
+// ── pg_stat_io helper (PG 16+) ───────────────────────────────────────────────
+
+// pgIOSample holds aggregate I/O read statistics from pg_stat_io.
+// hasTimings is false on PG < 16, when track_io_timing is off, or when fewer
+// than minIOSamples blocks have been read (not enough data to trust the average).
+type pgIOSample struct {
+	reads      int64
+	avgReadMs  float64 // mean per-block read latency in milliseconds
+	hasTimings bool
+}
+
+// minIOSamples is the minimum number of read calls required before we trust
+// the latency average.  Below this threshold the mean is too noisy.
+const minIOSamples = 1000
+
+// ssdLatencyThresholdMs: below this per-block read latency the storage is
+// considered SSD-like (NVMe ≈ 0.05 ms, SATA SSD ≈ 0.2 ms, SAN ≈ 0.5 ms,
+// HDD ≈ 5–10 ms).  1 ms is a conservative cut-off that keeps HDD safe.
+const ssdLatencyThresholdMs = 1.0
+
+// g03SampleIO queries pg_stat_io on PG 16+ with track_io_timing=on.
+// It returns a zero-value pgIOSample (hasTimings=false) on older servers,
+// when timing is disabled, or when there are not enough samples yet.
+func g03SampleIO(ctx context.Context, db *pgxpool.Pool) pgIOSample {
+	var major int
+	if err := db.QueryRow(ctx,
+		"SELECT current_setting('server_version_num')::int/10000").Scan(&major); err != nil || major < 16 {
+		return pgIOSample{}
+	}
+	// Sum reads and read_time across client backends for 'normal' and 'bulkread'
+	// contexts.  'normal' covers index lookups and heap fetches (the random reads
+	// that random_page_cost models); 'bulkread' covers sequential scans.
+	// Rows where read_time=0 are excluded so we only aggregate timed rows.
+	const q = `
+		SELECT coalesce(sum(reads), 0), coalesce(sum(read_time), 0)
+		FROM   pg_stat_io
+		WHERE  reads     > 0
+		  AND  read_time > 0
+		  AND  context   IN ('normal', 'bulkread')`
+	var totalReads int64
+	var totalTimeMs float64
+	if err := db.QueryRow(ctx, q).Scan(&totalReads, &totalTimeMs); err != nil ||
+		totalReads < minIOSamples || totalTimeMs == 0 {
+		return pgIOSample{}
+	}
+	return pgIOSample{
+		reads:      totalReads,
+		avgReadMs:  totalTimeMs / float64(totalReads),
+		hasTimings: true,
+	}
 }
 
 // G03-001 shared_buffers vs bgwriter eviction
@@ -223,36 +278,93 @@ func g03WALCompression(ctx context.Context, db *pgxpool.Pool) []Finding {
 }
 
 // G03-010 random_page_cost = 4.0 (HDD default)
-func g03RandomPageCost(ctx context.Context, db *pgxpool.Pool) []Finding {
+// On PG 16+ with track_io_timing=on the actual mean block-read latency from
+// pg_stat_io is used to validate or suppress the warning:
+//   - latency < 1 ms  → SSD-like  → WARN (evidence included in detail)
+//   - latency >= 1 ms → HDD-like  → OK   (4.0 is appropriate; suppressed)
+//   - no timing data  → fall back to config-only heuristic (current behaviour)
+func g03RandomPageCost(ctx context.Context, db *pgxpool.Pool, io pgIOSample) []Finding {
 	var val float64
 	if err := db.QueryRow(ctx, "SELECT setting::float FROM pg_settings WHERE name='random_page_cost'").Scan(&val); err != nil {
 		return []Finding{NewSkip("G03-010", g03, "random_page_cost", err.Error())}
 	}
 	obs := fmt.Sprintf("random_page_cost = %.1f", val)
-	if val >= 4.0 {
-		return []Finding{NewWarn("G03-010", g03, "random_page_cost", obs,
-			"Set random_page_cost=1.1 for SSD storage or 2.0 for SAN/RAID.",
-			"The default 4.0 is tuned for spinning disks; SSDs have near-sequential random I/O.",
+
+	if val < 4.0 {
+		// Already tuned — nothing to check.
+		return []Finding{NewOK("G03-010", g03, "random_page_cost", obs,
 			"https://www.postgresql.org/docs/current/runtime-config-query.html")}
 	}
-	return []Finding{NewOK("G03-010", g03, "random_page_cost", obs,
+
+	// val >= 4.0 (factory HDD default).  Use pg_stat_io latency when available.
+	if io.hasTimings {
+		ioEvidence := fmt.Sprintf("avg %.3f ms/block over %d reads (pg_stat_io)", io.avgReadMs, io.reads)
+		if io.avgReadMs < ssdLatencyThresholdMs {
+			// Measured latency is SSD-like — the 4.0 default is wrong.
+			return []Finding{NewWarn("G03-010", g03, "random_page_cost", obs,
+				"Set random_page_cost=1.1 for SSD storage or 2.0 for SAN/RAID.",
+				fmt.Sprintf("Storage is SSD-like (%s). "+
+					"random_page_cost=4.0 over-penalises index scans and may cause full-table scans instead.",
+					ioEvidence),
+				"https://www.postgresql.org/docs/current/runtime-config-query.html")}
+		}
+		// Measured latency is HDD-like — 4.0 is appropriate; suppress the warning.
+		return []Finding{NewOK("G03-010", g03, "random_page_cost",
+			fmt.Sprintf("%s — storage latency confirms HDD-class I/O (%s)", obs, ioEvidence),
+			"https://www.postgresql.org/docs/current/runtime-config-query.html")}
+	}
+
+	// No pg_stat_io data (PG < 16 or track_io_timing=off) — fall back to
+	// config-only heuristic and note how to get storage-aware detection.
+	return []Finding{NewWarn("G03-010", g03, "random_page_cost", obs,
+		"Set random_page_cost=1.1 for SSD storage or 2.0 for SAN/RAID.",
+		"The default 4.0 is tuned for spinning disks; SSDs have near-sequential random I/O. "+
+			"Enable track_io_timing=on (PG 16+) for storage-aware detection.",
 		"https://www.postgresql.org/docs/current/runtime-config-query.html")}
 }
 
 // G03-011 effective_io_concurrency <= 1
-func g03EffectiveIOConcurrency(ctx context.Context, db *pgxpool.Pool) []Finding {
+// On PG 16+ with track_io_timing=on the actual mean block-read latency from
+// pg_stat_io is used to validate or suppress the warning:
+//   - latency < 1 ms  → SSD-like  → WARN (evidence included in detail)
+//   - latency >= 1 ms → HDD-like  → OK   (low concurrency suits spinning disks)
+//   - no timing data  → fall back to config-only heuristic (current behaviour)
+func g03EffectiveIOConcurrency(ctx context.Context, db *pgxpool.Pool, io pgIOSample) []Finding {
 	var val int
 	if err := db.QueryRow(ctx, "SELECT setting::int FROM pg_settings WHERE name='effective_io_concurrency'").Scan(&val); err != nil {
 		return []Finding{NewSkip("G03-011", g03, "effective_io_concurrency", err.Error())}
 	}
 	obs := fmt.Sprintf("effective_io_concurrency = %d", val)
-	if val <= 1 {
-		return []Finding{NewWarn("G03-011", g03, "effective_io_concurrency", obs,
-			"Set effective_io_concurrency=200 for SSD or 2-4 for RAID.",
-			"Low concurrency prevents bitmap heap scans from prefetching pages.",
+
+	if val > 1 {
+		// Already tuned — nothing to check.
+		return []Finding{NewOK("G03-011", g03, "effective_io_concurrency", obs,
 			"https://www.postgresql.org/docs/current/runtime-config-resource.html")}
 	}
-	return []Finding{NewOK("G03-011", g03, "effective_io_concurrency", obs,
+
+	// val <= 1.  Use pg_stat_io latency when available.
+	if io.hasTimings {
+		ioEvidence := fmt.Sprintf("avg %.3f ms/block over %d reads (pg_stat_io)", io.avgReadMs, io.reads)
+		if io.avgReadMs < ssdLatencyThresholdMs {
+			// SSD-like — increasing concurrency will let bitmap heap scans prefetch more pages.
+			return []Finding{NewWarn("G03-011", g03, "effective_io_concurrency", obs,
+				"Set effective_io_concurrency=200 for SSD or 2-4 for RAID.",
+				fmt.Sprintf("Storage is SSD-like (%s). "+
+					"Low concurrency prevents bitmap heap scans from issuing parallel prefetch requests.",
+					ioEvidence),
+				"https://www.postgresql.org/docs/current/runtime-config-resource.html")}
+		}
+		// HDD-like — low concurrency is appropriate; suppress the warning.
+		return []Finding{NewOK("G03-011", g03, "effective_io_concurrency",
+			fmt.Sprintf("%s — storage latency confirms HDD-class I/O (%s)", obs, ioEvidence),
+			"https://www.postgresql.org/docs/current/runtime-config-resource.html")}
+	}
+
+	// No pg_stat_io data — fall back to config-only heuristic.
+	return []Finding{NewWarn("G03-011", g03, "effective_io_concurrency", obs,
+		"Set effective_io_concurrency=200 for SSD or 2-4 for RAID.",
+		"Low concurrency prevents bitmap heap scans from prefetching pages. "+
+			"Enable track_io_timing=on (PG 16+) for storage-aware detection.",
 		"https://www.postgresql.org/docs/current/runtime-config-resource.html")}
 }
 
