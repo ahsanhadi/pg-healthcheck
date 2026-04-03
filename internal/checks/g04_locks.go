@@ -161,10 +161,10 @@ func g04LockBlockerChains(ctx context.Context, db *pgxpool.Pool) []Finding {
 		pids     map[int]struct{}
 	}
 	type blockerAgg struct {
-		user       string
-		app        string
-		victims    int
-		totalSec   int
+		user        string
+		app         string
+		victims     int
+		totalSec    int
 		blockerPIDs map[int]struct{}
 	}
 

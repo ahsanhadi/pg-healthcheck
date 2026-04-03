@@ -73,7 +73,11 @@ func runHealthcheck(t *testing.T, extraArgs ...string) map[string]checkResult {
 	}
 	args = append(args, extraArgs...)
 
-	binPath, err := filepath.Abs(*binary)
+	// Go test changes CWD to the package directory (tests/) before running,
+	// so binary paths like "./pg_healthcheck" are relative to tests/ — not the
+	// repo root where the binary is actually built.  Resolve from ".." (repo root)
+	// before absolutising so we find the real binary.
+	binPath, err := filepath.Abs(filepath.Join("..", *binary))
 	if err != nil {
 		t.Fatalf("failed to resolve binary path %q: %v", *binary, err)
 	}
