@@ -187,12 +187,15 @@ func runSingle(cfg *config.Config, checkers []checks.Checker) ([]checks.Finding,
 		findings = append(findings, fs...)
 	}
 
-	// G12 Spock checks — run cluster checker with a single-node slice
-	cCtx, cCancel := context.WithTimeout(ctx, cfg.CheckTimeout)
-	node := &checks.NodeConn{Name: host, Host: cfg.Host, Port: cfg.Port, DB: db}
-	g12findings, _ := spockChecker.RunCluster(cCtx, []*checks.NodeConn{node}, cfg)
-	findings = append(findings, g12findings...)
-	cCancel()
+	// G12 Spock checks — run cluster checker with a single-node slice.
+	// Honour the --groups filter: skip G12 when a filter is active and G12 is not in it.
+	if groupRequested(cfg.Groups, "G12") {
+		cCtx, cCancel := context.WithTimeout(ctx, cfg.CheckTimeout)
+		node := &checks.NodeConn{Name: host, Host: cfg.Host, Port: cfg.Port, DB: db}
+		g12findings, _ := spockChecker.RunCluster(cCtx, []*checks.NodeConn{node}, cfg)
+		findings = append(findings, g12findings...)
+		cCancel()
+	}
 
 	return findings, pgVer, host
 }
@@ -262,8 +265,8 @@ func runCluster(cfg *config.Config, checkers []checks.Checker) ([]checks.Finding
 		}
 	}
 
-	// G12 cross-node Spock checks
-	if len(nodes) > 0 {
+	// G12 cross-node Spock checks — honour the --groups filter.
+	if len(nodes) > 0 && groupRequested(cfg.Groups, "G12") {
 		cCtx, cCancel := context.WithTimeout(ctx, 2*cfg.CheckTimeout)
 		g12, _ := spockChecker.RunCluster(cCtx, nodes, cfg)
 		cCancel()
@@ -378,6 +381,20 @@ func validateGroups(groups []string, cmd *cobra.Command) error {
 		)
 	}
 	return nil
+}
+
+// groupRequested reports whether id should run given the active groups filter.
+// An empty/nil filter means "run all", so it always returns true.
+func groupRequested(groups []string, id string) bool {
+	if len(groups) == 0 {
+		return true
+	}
+	for _, g := range groups {
+		if strings.EqualFold(strings.TrimSpace(g), id) {
+			return true
+		}
+	}
+	return false
 }
 
 // selectCheckers filters allCheckers to only those in the groups slice.
