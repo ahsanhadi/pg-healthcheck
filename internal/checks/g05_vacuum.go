@@ -301,6 +301,7 @@ func g05TableBloat(ctx context.Context, db *pgxpool.Pool) []Finding {
 		(n_live_tup + n_dead_tup) AS est_tups
 		FROM pg_stat_user_tables
 		WHERE (n_live_tup + n_dead_tup) > 0
+		AND pg_total_relation_size(relid) > 1048576
 		AND pg_total_relation_size(relid) > (n_live_tup + n_dead_tup) * 600
 		ORDER BY total_bytes DESC LIMIT 10`
 	rows, err := db.Query(ctx, q)
