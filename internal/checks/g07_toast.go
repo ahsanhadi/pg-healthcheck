@@ -258,22 +258,24 @@ func g07CacheHitRatio(ctx context.Context, db *pgxpool.Pool) []Finding {
 		"https://www.postgresql.org/docs/current/runtime-config-resource.html")}
 }
 
-// G07-009 pg_check_relation info on PG 16+
+// G07-009 verify_heapam availability (amcheck, PG 13+)
 func g07PgCheckRelation(ctx context.Context, db *pgxpool.Pool) []Finding {
-	var major int
-	if err := db.QueryRow(ctx, "SELECT current_setting('server_version_num')::int / 10000").Scan(&major); err != nil {
-		return []Finding{NewSkip("G07-009", g07, "pg_check_relation availability", err.Error())}
+	var exists bool
+	err := db.QueryRow(ctx,
+		"SELECT EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE p.proname = 'verify_heapam' AND n.nspname = 'pg_catalog')").Scan(&exists)
+	if err != nil {
+		return []Finding{NewSkip("G07-009", g07, "verify_heapam availability", err.Error())}
 	}
-	if major < 16 {
-		return []Finding{NewInfo("G07-009", g07, "pg_check_relation availability",
-			fmt.Sprintf("PostgreSQL %d — pg_check_relation available in PG 16+", major),
-			"Upgrade to PostgreSQL 16+ to gain access to pg_check_relation for relation verification.",
-			"",
-			"https://www.postgresql.org/docs/current/functions-admin.html")}
+	if !exists {
+		return []Finding{NewInfo("G07-009", g07, "verify_heapam availability",
+			"verify_heapam not available — install amcheck to enable heap relation verification",
+			"Run: CREATE EXTENSION IF NOT EXISTS amcheck",
+			"amcheck's verify_heapam() can detect heap corruption earlier than pg_dump.",
+			"https://www.postgresql.org/docs/current/amcheck.html")}
 	}
-	return []Finding{NewInfo("G07-009", g07, "pg_check_relation availability",
-		fmt.Sprintf("PostgreSQL %d — pg_check_relation is available", major),
-		"Consider scheduling periodic pg_check_relation() calls for critical tables.",
-		"pg_check_relation verifies relation consistency without the overhead of pg_dump.",
-		"https://www.postgresql.org/docs/current/functions-admin.html")}
+	return []Finding{NewInfo("G07-009", g07, "verify_heapam availability",
+		"amcheck verify_heapam() is available",
+		"Consider scheduling periodic verify_heapam() calls for critical tables.",
+		"verify_heapam() checks heap page and tuple-level consistency without a full dump.",
+		"https://www.postgresql.org/docs/current/amcheck.html")}
 }
