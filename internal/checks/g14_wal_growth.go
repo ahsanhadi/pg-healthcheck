@@ -58,6 +58,7 @@ func (g *G14WALGrowth) Run(ctx context.Context, db *pgxpool.Pool, cfg *config.Co
 	f = append(f, g14WALFilesystemPct(ctx, db, cfg)...)
 	f = append(f, g14LongTxWALRetain(ctx, db)...)
 	f = append(f, g14CheckpointForced(ctx, db)...)
+	f = append(f, g14WALAccumulationSinceCheckpoint(ctx, db)...)
 
 	// Ensure at least 1 second has elapsed since sample 1 so the rate
 	// calculation has a meaningful denominator even on fast/quiet systems.
@@ -652,6 +653,79 @@ func g14LongTxWALRetain(ctx context.Context, db *pgxpool.Pool) []Finding {
 	return []Finding{NewWarn("G14-014", g14, "Long transactions blocking WAL recycle", obs,
 		"Terminate long-idle transactions; set idle_in_transaction_session_timeout to auto-clean.",
 		strings.Join(detail, "\n"),
+		"https://www.postgresql.org/docs/current/wal-configuration.html")}
+}
+
+// ── G14-015  WAL accumulation since last checkpoint ───────────────────────────
+//
+// PostgreSQL can only recycle WAL segments that are older than the last
+// checkpoint LSN. Until a checkpoint runs, every segment generated since the
+// previous checkpoint is "reserved" on disk — it cannot be removed or reused
+// even if its data has already been replicated and archived.
+//
+// On write-heavy nodes in a Spock cluster this can silently fill the pg_wal
+// directory: write traffic builds up WAL on n2/n3 while n1 only receives;
+// if checkpoint_timeout is long (e.g. 15 min) and max_wal_size is small,
+// the unreclaimable segment pile grows until disk pressure forces a checkpoint
+// or an operator runs one manually.
+//
+// This check compares bytes generated since the last checkpoint against
+// max_wal_size to give early warning before the situation becomes critical.
+// When this fires on some cluster nodes but not others it is a strong signal
+// that write traffic is imbalanced across the cluster.
+func g14WALAccumulationSinceCheckpoint(ctx context.Context, db *pgxpool.Pool) []Finding {
+	const q = `
+		SELECT
+		    pg_wal_lsn_diff(pg_current_wal_lsn(), checkpoint_lsn)         AS bytes_since_ckpt,
+		    EXTRACT(EPOCH FROM (now() - checkpoint_time))::bigint           AS secs_since_ckpt,
+		    (SELECT setting::bigint * 1024 * 1024
+		     FROM pg_settings WHERE name = 'max_wal_size')                  AS max_wal_bytes
+		FROM pg_control_checkpoint()`
+	var bytesSinceCkpt, secsSinceCkpt, maxWALBytes int64
+	if err := db.QueryRow(ctx, q).Scan(&bytesSinceCkpt, &secsSinceCkpt, &maxWALBytes); err != nil {
+		return []Finding{NewSkip("G14-015", g14, "WAL accumulation since checkpoint", err.Error())}
+	}
+	if maxWALBytes <= 0 {
+		return []Finding{NewSkip("G14-015", g14, "WAL accumulation since checkpoint",
+			"Could not read max_wal_size from pg_settings")}
+	}
+
+	pct := int(float64(bytesSinceCkpt) / float64(maxWALBytes) * 100)
+	obs := fmt.Sprintf(
+		"%d%% of max_wal_size used since last checkpoint  (%.1f GB unreclaimable / %.1f GB max_wal_size — checkpoint %s ago)",
+		pct,
+		float64(bytesSinceCkpt)/1024/1024/1024,
+		float64(maxWALBytes)/1024/1024/1024,
+		g14FmtSecs(secsSinceCkpt),
+	)
+
+	if pct >= 80 {
+		return []Finding{NewCrit("G14-015", g14, "WAL accumulation since checkpoint", obs,
+			"Run CHECKPOINT immediately on this node, then increase max_wal_size or reduce checkpoint_timeout.",
+			fmt.Sprintf(
+				"%.1f GB of WAL segments are reserved and cannot be recycled until the next checkpoint. "+
+					"At this rate a forced checkpoint is imminent, which causes an I/O spike. "+
+					"On a Spock cluster, check whether write traffic is balanced — this warning "+
+					"firing only on certain nodes indicates write-traffic imbalance. "+
+					"Resolution: run 'CHECKPOINT;' on affected nodes, then tune max_wal_size "+
+					"(currently %.1f GB) to match your workload.",
+				float64(bytesSinceCkpt)/1024/1024/1024,
+				float64(maxWALBytes)/1024/1024/1024),
+			"https://www.postgresql.org/docs/current/wal-configuration.html")}
+	}
+	if pct >= 50 {
+		return []Finding{NewWarn("G14-015", g14, "WAL accumulation since checkpoint", obs,
+			"Consider increasing max_wal_size or reducing checkpoint_timeout to spread checkpoint I/O.",
+			fmt.Sprintf(
+				"More than half of max_wal_size (%.1f GB) has accumulated since the last checkpoint "+
+					"and cannot be recycled until the next one. On a Spock cluster this check "+
+					"firing on write-heavy nodes (e.g. n2/n3) but not read nodes (e.g. n1) "+
+					"indicates write-traffic imbalance — run CHECKPOINT on the affected nodes "+
+					"to drain reserved segments and monitor whether the imbalance persists.",
+				float64(maxWALBytes)/1024/1024/1024),
+			"https://www.postgresql.org/docs/current/wal-configuration.html")}
+	}
+	return []Finding{NewOK("G14-015", g14, "WAL accumulation since checkpoint", obs,
 		"https://www.postgresql.org/docs/current/wal-configuration.html")}
 }
 
