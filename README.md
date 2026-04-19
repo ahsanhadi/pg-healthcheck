@@ -8,7 +8,7 @@
 ![License](https://img.shields.io/badge/license-PostgreSQL-blue)
 ![Platforms](https://img.shields.io/badge/platforms-linux%20%7C%20macOS%20%7C%20windows-lightgrey)
 
-Runs **115+ checks across 14 groups** and queries live PostgreSQL system catalog views — no estimates, no simulated data. Output is coloured terminal text or structured JSON for GUI/API consumption.
+Runs **180+ checks across 14 groups** and queries live PostgreSQL system catalog views — no estimates, no simulated data. Output is coloured terminal text or structured JSON for GUI/API consumption.
 
 ---
 
@@ -493,7 +493,7 @@ check_timeout_seconds: 30
 |---|---|---|
 | G01 | Connection & Availability | 9 |
 | G02 | pgBackRest Backup | 14 |
-| G03 | Performance & Query Stats | 15 |
+| G03 | Performance & Query Stats | 17 |
 | G04 | Locks & Blocking | 10 |
 | G05 | Vacuum & Bloat | 11 |
 | G06 | Indexes | 9 |
@@ -503,7 +503,7 @@ check_timeout_seconds: 30
 | G10 | Upgrade Readiness | 15 |
 | G11 | Security | 8 |
 | G12 | pgEdge / Spock Cluster | 20 |
-| G13 | OS & Resource-Level | 7 |
+| G13 | OS & Resource-Level | 11 |
 | G14 | WAL Growth & Generation Rate | 14 |
 
 ### G09 — WAL & Replication Slots (recent additions)
@@ -526,6 +526,18 @@ check_timeout_seconds: 30
 > All G12 Spock catalog queries have been verified against live pgEdge Spock schema.
 > Checks that reference tables or columns not present on the installed Spock version
 > skip gracefully with an INFO message rather than erroring.
+
+### G13 — OS & Resource-Level (recent additions)
+
+| Check | What it detects |
+|---|---|
+| G13-008 | **Transparent Huge Pages** — warns when THP is set to `always`; causes unpredictable latency spikes in PostgreSQL due to background `khugepaged` compaction (Linux only) |
+| G13-009 | **CPU frequency governor** — warns when governor is `powersave` or `schedutil`, which throttles CPU frequency under load (Linux only; skips gracefully on cloud VMs without cpufreq) |
+| G13-010 | **Data directory disk space** — checks free space on the `data_directory` filesystem via `syscall.Statfs`; WARN at 80% used, CRITICAL at 90% (the data dir may be on a different mount than `pg_wal`, which is checked by G14-013) |
+| G13-011 | **Postmaster uptime** — queries `pg_postmaster_start_time()`; WARN if restarted within the last hour (possible crash/OOM kill), INFO if within 24 hours |
+
+> **Note:** G13-010 requires pg_healthcheck to run directly on the PostgreSQL host (same as G14-013).
+> Remote connections will receive an INFO skip with instructions to run locally.
 
 ### G14 checks at a glance
 
@@ -619,7 +631,7 @@ pg_healthcheck/
 │   │   ├── checker.go           Finding struct + Checker interface
 │   │   ├── g01_connection.go    Connection & availability (9 checks)
 │   │   ├── g02_backrest.go      pgBackRest backup (14 checks)
-│   │   ├── g03_performance.go   Performance & query stats (15 checks)
+│   │   ├── g03_performance.go   Performance & query stats (17 checks)
 │   │   ├── g04_locks.go         Locks & blocking (10 checks)
 │   │   ├── g05_vacuum.go        Vacuum & bloat (11 checks)
 │   │   ├── g06_indexes.go       Indexes (9 checks)
@@ -629,7 +641,7 @@ pg_healthcheck/
 │   │   ├── g10_upgrade.go       Upgrade readiness (15 checks)
 │   │   ├── g11_security.go      Security (8 checks)
 │   │   ├── g12_spock.go         pgEdge / Spock cluster (20 checks)
-│   │   ├── g13_os_resources.go  OS & resource-level (7 checks)
+│   │   ├── g13_os_resources.go  OS & resource-level (11 checks)
 │   │   └── g14_wal_growth.go    WAL growth & generation rate (14 checks)
 │   │
 │   └── report/
@@ -651,12 +663,18 @@ pg_healthcheck/
 ## Requirements
 
 - **Go 1.23+** — install with `brew install go`
-- **PostgreSQL 13+** — checks that need PG 14/15/16 skip gracefully on older versions
-- **pg_monitor role** — recommended minimum privilege for the healthcheck user
-- **pgbackrest** binary in `PATH` — G02 checks skip gracefully if absent
-- **amcheck extension** — G07 B-tree integrity check skips if not installed
-- **pgEdge Spock extension** — G12 checks skip gracefully if Spock is not installed
-- **Same host as PostgreSQL** — required only for G14-013 filesystem check (uses `syscall.Statfs`)
+- **PostgreSQL 13+** — checks that need PG 14/15/16/17 skip gracefully on older versions
+- **`pg_monitor` role** — recommended minimum privilege; grants access to all catalog views and `pg_stat_*` functions without superuser. Some checks (G11 security inspection, `amcheck` index verification) benefit from superuser privileges and will skip or return partial results without them
+- **pgBackRest** — G02 checks skip gracefully with a clear message if pgBackRest is not installed; no config needed on non-pgBackRest environments
+- **amcheck extension** — G07 B-tree and heap integrity checks skip if not installed (`CREATE EXTENSION amcheck`)
+- **pgEdge Spock extension** — G12 emits a single INFO finding and skips all 20 checks if Spock is not installed; safe to run on standard PostgreSQL
+- **Local execution** — required for G13-010 (data directory disk space) and G14-013 (pg_wal filesystem); both use `syscall.Statfs` and must run on the PostgreSQL host. Remote connections receive a graceful INFO skip
+
+> **Threshold tuning:** All warning and critical thresholds have safe built-in defaults but
+> **should be reviewed and tuned to your workload** before treating findings as actionable.
+> A threshold appropriate for a small reporting database will produce false positives on a
+> high-throughput OLTP system, and vice versa. See the [Configuration File](#configuration-file-healthcheckyaml)
+> section for a full list of tunable keys.
 
 ---
 
