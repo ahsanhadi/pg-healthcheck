@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgedge/pg_healthcheck/internal/config"
@@ -784,14 +785,15 @@ func g12ReplicationProgress(ctx context.Context, db *pgxpool.Pool) []Finding {
 	var lines []string
 	var maxLagBytes int64
 	for rows.Next() {
-		var local, remote, commitTs, updatedTs string
+		var local, remote string
+		var commitTs, updatedTs time.Time
 		var lagBytes int64
 		_ = rows.Scan(&local, &remote, &commitTs, &lagBytes, &updatedTs)
 		if lagBytes > maxLagBytes {
 			maxLagBytes = lagBytes
 		}
 		lines = append(lines, fmt.Sprintf("%-12s → %-12s  lag=%d MB  last_commit=%s",
-			remote, local, lagBytes/1024/1024, commitTs))
+			remote, local, lagBytes/1024/1024, commitTs.UTC().Format("2006-01-02 15:04:05 UTC")))
 	}
 	if err := rows.Err(); err != nil {
 		return []Finding{NewSkip("G12-023", g12, "Spock replication progress", "scan error: "+err.Error())}
