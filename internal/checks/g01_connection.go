@@ -170,11 +170,14 @@ func g01VersionEOL(ctx context.Context, db *pgxpool.Pool) []Finding {
 }
 
 // G01-006 Connection saturation
+// Counts only client backend connections — excludes autovacuum workers, walsender,
+// background workers, and other internal processes that do not consume user-facing slots.
 func g01ConnSaturation(ctx context.Context, db *pgxpool.Pool, cfg *config.Config) []Finding {
 	const q = `SELECT count(*),
 		(SELECT setting::int FROM pg_settings WHERE name='max_connections'),
 		(SELECT setting::int FROM pg_settings WHERE name='superuser_reserved_connections')
-		FROM pg_stat_activity`
+		FROM pg_stat_activity
+		WHERE backend_type = 'client backend'`
 	var active, maxConn, reserved int
 	if err := db.QueryRow(ctx, q).Scan(&active, &maxConn, &reserved); err != nil {
 		return []Finding{NewSkip("G01-006", g01, "Connection saturation", err.Error())}

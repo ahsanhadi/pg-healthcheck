@@ -28,10 +28,12 @@ func (g *G02Backrest) GroupID() string { return "G02" }
 func (g *G02Backrest) Run(ctx context.Context, db *pgxpool.Pool, cfg *config.Config) ([]Finding, error) {
 	iniCfg, err := ini.Load(cfg.BackrestConfig)
 	if err != nil {
-		return []Finding{NewInfo("G02-000", g02, "pgBackRest config unreadable",
-			fmt.Sprintf("Cannot read %s: %v", cfg.BackrestConfig, err),
-			"Install pgBackRest and create a valid config file.",
-			"All G02 checks require a readable pgbackrest.conf.",
+		return []Finding{NewInfo("G02-000", g02, "pgBackRest not detected",
+			fmt.Sprintf("pgBackRest config not found at %s — all G02 checks are skipped.", cfg.BackrestConfig),
+			"This is expected on environments not using pgBackRest for backup management. "+
+				"If pgBackRest is installed, set the correct config path via backrest_config in healthcheck.yaml.",
+			"All 14 G02 checks cover pgBackRest-specific settings (archive-async, spool-path, retention, "+
+				"WAL archiving health etc.) and are not applicable without pgBackRest.",
 			"https://pgbackrest.org/configuration.html")}, nil
 	}
 

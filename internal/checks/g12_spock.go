@@ -21,6 +21,24 @@ func (g *G12SpockCluster) GroupID() string { return "G12" }
 func (g *G12SpockCluster) RunCluster(ctx context.Context, nodes []*NodeConn, cfg *config.Config) ([]Finding, error) {
 	var all []Finding
 
+	// Gate: if Spock is not installed on any node, skip all G12 checks with a clear explanation.
+	spockFound := false
+	for _, node := range nodes {
+		if spockInstalled(ctx, node.DB) {
+			spockFound = true
+			break
+		}
+	}
+	if !spockFound {
+		return []Finding{NewInfo("G12-000", g12, "Spock extension not detected",
+			"The Spock extension is not installed on any of the connected nodes — all G12 checks are skipped.",
+			"G12 checks are only applicable to pgEdge multi-node Spock cluster environments. "+
+				"This is expected on standard single-instance PostgreSQL deployments.",
+			"All 20 G12 checks cover Spock-specific diagnostics (subscription health, apply lag, "+
+				"replication worker status, node consistency, sequence collision detection etc.).",
+			"https://github.com/pgEdge/spock")}, nil
+	}
+
 	// Per-node checks
 	for _, node := range nodes {
 		var nf []Finding

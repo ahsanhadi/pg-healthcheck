@@ -3,6 +3,11 @@ package checks
 import (
 	"context"
 	"fmt"
+	"os"
+	"runtime"
+	"strings"
+	"syscall"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgedge/pg_healthcheck/internal/config"
@@ -25,6 +30,10 @@ func (g *G13OSResources) Run(ctx context.Context, db *pgxpool.Pool, cfg *config.
 	f = append(f, g13TempFileSpill(ctx, db)...)
 	f = append(f, g13Conflicts(ctx, db)...)
 	f = append(f, g13MaxConnections(ctx, db)...)
+	f = append(f, g13TransparentHugePages()...)
+	f = append(f, g13CPUGovernor()...)
+	f = append(f, g13DataDirFreeSpace(ctx, db)...)
+	f = append(f, g13PostmasterUptime(ctx, db)...)
 	return f, nil
 }
 
@@ -173,4 +182,149 @@ func g13MaxConnections(ctx context.Context, db *pgxpool.Pool) []Finding {
 	}
 	return []Finding{NewOK("G13-007", g13, "max_connections advisory", obs,
 		"https://www.postgresql.org/docs/current/runtime-config-connection.html")}
+}
+
+// G13-008 Transparent Huge Pages (Linux only)
+// THP=always causes random latency spikes in PostgreSQL due to background khugepaged
+// compaction stealing CPU and causing stalls. PostgreSQL recommends madvise or never.
+func g13TransparentHugePages() []Finding {
+	if runtime.GOOS != "linux" {
+		return []Finding{NewSkip("G13-008", g13, "Transparent Huge Pages",
+			"Check only applicable on Linux")}
+	}
+	data, err := os.ReadFile("/sys/kernel/mm/transparent_hugepage/enabled")
+	if err != nil {
+		return []Finding{NewSkip("G13-008", g13, "Transparent Huge Pages",
+			fmt.Sprintf("Cannot read THP setting: %v", err))}
+	}
+	val := strings.TrimSpace(string(data))
+	obs := fmt.Sprintf("transparent_hugepage/enabled: %s", val)
+	if strings.Contains(val, "[always]") {
+		return []Finding{NewWarn("G13-008", g13, "Transparent Huge Pages", obs,
+			"Set THP to madvise or never: echo madvise > /sys/kernel/mm/transparent_hugepage/enabled",
+			"THP=always causes unpredictable latency spikes in PostgreSQL. The background khugepaged "+
+				"compaction process stalls application threads during page coalescence. "+
+				"PostgreSQL explicitly recommends against THP=always.",
+			"https://www.postgresql.org/docs/current/kernel-resources.html")}
+	}
+	return []Finding{NewOK("G13-008", g13, "Transparent Huge Pages", obs,
+		"https://www.postgresql.org/docs/current/kernel-resources.html")}
+}
+
+// G13-009 CPU frequency governor (Linux only)
+// The powersave governor throttles CPU frequency to reduce power consumption,
+// causing latency spikes and reduced throughput on PostgreSQL workloads.
+func g13CPUGovernor() []Finding {
+	if runtime.GOOS != "linux" {
+		return []Finding{NewSkip("G13-009", g13, "CPU frequency governor",
+			"Check only applicable on Linux")}
+	}
+	data, err := os.ReadFile("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")
+	if err != nil {
+		// cpufreq is not available on many cloud VMs and containers — skip silently.
+		return []Finding{NewSkip("G13-009", g13, "CPU frequency governor",
+			"cpufreq not available on this system (common in cloud VMs and containers)")}
+	}
+	val := strings.TrimSpace(string(data))
+	obs := fmt.Sprintf("CPU scaling governor: %s", val)
+	if val == "powersave" || val == "schedutil" {
+		return []Finding{NewWarn("G13-009", g13, "CPU frequency governor", obs,
+			"Switch to performance governor: echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor",
+			fmt.Sprintf("Governor '%s' throttles CPU frequency under load, causing latency spikes and "+
+				"reduced throughput. The 'performance' governor keeps CPU at maximum frequency "+
+				"and is strongly recommended for latency-sensitive PostgreSQL workloads.", val),
+			"https://www.kernel.org/doc/html/latest/admin-guide/pm/cpufreq.html")}
+	}
+	return []Finding{NewOK("G13-009", g13, "CPU frequency governor", obs,
+		"https://www.kernel.org/doc/html/latest/admin-guide/pm/cpufreq.html")}
+}
+
+// G13-010 Data directory filesystem free space
+// Queries the PostgreSQL data_directory path and checks available disk space via
+// syscall.Statfs. The data directory may be on a different filesystem than pg_wal
+// (checked by G14-013), so both checks are needed.
+func g13DataDirFreeSpace(ctx context.Context, db *pgxpool.Pool) []Finding {
+	var dataDir string
+	if err := db.QueryRow(ctx, "SELECT setting FROM pg_settings WHERE name='data_directory'").Scan(&dataDir); err != nil {
+		return []Finding{NewSkip("G13-010", g13, "Data directory disk space", err.Error())}
+	}
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(dataDir, &stat); err != nil {
+		if os.IsPermission(err) {
+			return []Finding{NewInfo("G13-010", g13, "Data directory disk space",
+				fmt.Sprintf("Permission denied reading filesystem stats for %s", dataDir),
+				"Run pg_healthcheck as the postgres OS user or grant read access to the data directory.",
+				fmt.Sprintf("syscall.Statfs error: %v", err),
+				"https://www.postgresql.org/docs/current/storage-file-layout.html")}
+		}
+		return []Finding{NewInfo("G13-010", g13, "Data directory disk space",
+			fmt.Sprintf("Filesystem stat requires local execution (data_directory: %s)", dataDir),
+			"Run pg_healthcheck directly on the PostgreSQL host — not via a remote connection.",
+			fmt.Sprintf("syscall.Statfs error: %v", err),
+			"https://www.postgresql.org/docs/current/storage-file-layout.html")}
+	}
+	bsize := uint64(stat.Bsize) //nolint:unconvert
+	total := stat.Blocks * bsize
+	avail := stat.Bavail * bsize
+	pct := 0
+	if total > 0 {
+		pct = int(float64(total-avail) / float64(total) * 100)
+	}
+	obs := fmt.Sprintf("Data directory filesystem %d%% used (%.1f GB free of %.1f GB)",
+		pct, float64(avail)/1024/1024/1024, float64(total)/1024/1024/1024)
+	if pct >= 90 {
+		return []Finding{NewCrit("G13-010", g13, "Data directory disk space", obs,
+			"Free space immediately — PostgreSQL will crash when the data directory filesystem is full.",
+			"Less than 10% disk space remaining. A full data directory filesystem causes PostgreSQL "+
+				"to halt all write operations and may corrupt in-flight transactions.",
+			"https://www.postgresql.org/docs/current/storage-file-layout.html")}
+	}
+	if pct >= 80 {
+		return []Finding{NewWarn("G13-010", g13, "Data directory disk space", obs,
+			"Expand the filesystem, archive old data, or move tablespaces before reaching critical levels.",
+			"Less than 20% disk space remaining on the data directory filesystem.",
+			"https://www.postgresql.org/docs/current/storage-file-layout.html")}
+	}
+	return []Finding{NewOK("G13-010", g13, "Data directory disk space", obs,
+		"https://www.postgresql.org/docs/current/storage-file-layout.html")}
+}
+
+// G13-011 Postmaster uptime and recent restart detection
+// A PostgreSQL restart within the last hour is a strong indicator of an unexpected
+// crash (OOM kill, panic, or kernel signal). Restarts within 24 hours are noted
+// as informational to prompt log review even for planned maintenance.
+func g13PostmasterUptime(ctx context.Context, db *pgxpool.Pool) []Finding {
+	var startTime time.Time
+	if err := db.QueryRow(ctx, "SELECT pg_postmaster_start_time()").Scan(&startTime); err != nil {
+		return []Finding{NewSkip("G13-011", g13, "Postmaster uptime", err.Error())}
+	}
+	uptime := time.Since(startTime)
+	obs := fmt.Sprintf("PostgreSQL up for %s (started %s)",
+		g13FormatDuration(uptime), startTime.UTC().Format("2006-01-02 15:04:05 UTC"))
+	if uptime < time.Hour {
+		return []Finding{NewWarn("G13-011", g13, "Postmaster uptime", obs,
+			"Check PostgreSQL logs and system journal for crash cause: journalctl -u postgresql --since '-2h'",
+			"PostgreSQL restarted within the last hour. This may indicate an OOM kill, kernel signal, "+
+				"or unexpected crash. Review logs before dismissing.",
+			"https://www.postgresql.org/docs/current/server-start.html")}
+	}
+	if uptime < 24*time.Hour {
+		return []Finding{NewInfo("G13-011", g13, "Postmaster uptime", obs,
+			"Review PostgreSQL logs to confirm this was a planned restart.",
+			"PostgreSQL was restarted within the last 24 hours.",
+			"https://www.postgresql.org/docs/current/server-start.html")}
+	}
+	return []Finding{NewOK("G13-011", g13, "Postmaster uptime", obs,
+		"https://www.postgresql.org/docs/current/server-start.html")}
+}
+
+// g13FormatDuration returns a human-readable duration string.
+func g13FormatDuration(d time.Duration) string {
+	if d >= 24*time.Hour {
+		return fmt.Sprintf("%.0f days", d.Hours()/24)
+	}
+	if d >= time.Hour {
+		return fmt.Sprintf("%.1f hours", d.Hours())
+	}
+	return fmt.Sprintf("%.0f minutes", d.Minutes())
 }

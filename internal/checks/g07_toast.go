@@ -258,8 +258,36 @@ func g07CacheHitRatio(ctx context.Context, db *pgxpool.Pool) []Finding {
 		"https://www.postgresql.org/docs/current/runtime-config-resource.html")}
 }
 
-// G07-009 verify_heapam availability (amcheck, PG 13+)
+// G07-009 relation integrity probe: pg_check_relation (PG 16+ built-in) or verify_heapam (amcheck, PG 13+)
 func g07PgCheckRelation(ctx context.Context, db *pgxpool.Pool) []Finding {
+	var major int
+	if err := db.QueryRow(ctx, "SELECT current_setting('server_version_num')::int / 10000").Scan(&major); err != nil {
+		return []Finding{NewSkip("G07-009", g07, "pg_check_relation availability", err.Error())}
+	}
+
+	if major >= 16 {
+		// pg_check_relation is a built-in catalog function added in PG 16
+		var exists bool
+		err := db.QueryRow(ctx,
+			"SELECT EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE p.proname = 'pg_check_relation' AND n.nspname = 'pg_catalog')").Scan(&exists)
+		if err != nil {
+			return []Finding{NewSkip("G07-009", g07, "pg_check_relation availability", err.Error())}
+		}
+		if exists {
+			return []Finding{NewInfo("G07-009", g07, "pg_check_relation availability",
+				fmt.Sprintf("PostgreSQL %d — pg_check_relation is available", major),
+				"Consider scheduling periodic pg_check_relation() calls for critical tables.",
+				"pg_check_relation verifies relation consistency without the overhead of pg_dump.",
+				"https://www.postgresql.org/docs/current/functions-admin.html")}
+		}
+		return []Finding{NewInfo("G07-009", g07, "pg_check_relation availability",
+			fmt.Sprintf("PostgreSQL %d — pg_check_relation not found in pg_catalog", major),
+			"",
+			"",
+			"https://www.postgresql.org/docs/current/functions-admin.html")}
+	}
+
+	// PG 13–15: fall back to amcheck's verify_heapam
 	var exists bool
 	err := db.QueryRow(ctx,
 		"SELECT EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE p.proname = 'verify_heapam' AND n.nspname = 'pg_catalog')").Scan(&exists)

@@ -38,6 +38,7 @@ func (g *G03Performance) Run(ctx context.Context, db *pgxpool.Pool, cfg *config.
 	f = append(f, g03DefaultStatisticsTarget(ctx, db)...)
 	f = append(f, g03TempFiles(ctx, db)...)
 	f = append(f, g03CacheHitRatio(ctx, db)...)
+	f = append(f, g03TrackIOTiming(ctx, db)...)
 	return f, nil
 }
 
@@ -496,4 +497,27 @@ func g03TempFiles(ctx context.Context, db *pgxpool.Pool) []Finding {
 	}
 	return []Finding{NewOK("G03-015", g03, "Temp file spill", obs,
 		"https://www.postgresql.org/docs/current/runtime-config-resource.html")}
+}
+
+// G03-017 track_io_timing=off advisory
+// When disabled, pg_stat_io, pg_stat_database (blk_read_time/blk_write_time), and
+// pg_stat_statements lose per-block I/O latency data, making it impossible to
+// distinguish CPU-bound from I/O-bound queries. Overhead is typically <2% on modern hardware.
+func g03TrackIOTiming(ctx context.Context, db *pgxpool.Pool) []Finding {
+	var val string
+	if err := db.QueryRow(ctx, "SELECT setting FROM pg_settings WHERE name='track_io_timing'").Scan(&val); err != nil {
+		return []Finding{NewSkip("G03-017", g03, "track_io_timing", err.Error())}
+	}
+	obs := fmt.Sprintf("track_io_timing = %s", val)
+	if val == "off" {
+		return []Finding{NewInfo("G03-017", g03, "track_io_timing", obs,
+			"Enable track_io_timing=on in postgresql.conf.",
+			"With track_io_timing=off, per-block I/O latency is unavailable in pg_stat_io, "+
+				"pg_stat_database (blk_read_time/blk_write_time), and pg_stat_statements. "+
+				"This makes it impossible to distinguish CPU-bound from I/O-bound queries. "+
+				"Overhead is typically less than 2% on modern hardware.",
+			"https://www.postgresql.org/docs/current/runtime-config-statistics.html")}
+	}
+	return []Finding{NewOK("G03-017", g03, "track_io_timing", obs,
+		"https://www.postgresql.org/docs/current/runtime-config-statistics.html")}
 }
