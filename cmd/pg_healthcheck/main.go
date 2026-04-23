@@ -72,7 +72,8 @@ var allCheckers = []checks.Checker{
 	&checks.G10Upgrade{},
 	&checks.G11Security{},
 	&checks.G13OSResources{},
-	&checks.G14WALGrowth{}, // WAL growth & generation rate
+	&checks.G14WALGrowth{},
+	&checks.G15ReplicationHealth{},
 }
 
 var spockChecker = &checks.G12SpockCluster{}

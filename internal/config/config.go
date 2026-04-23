@@ -58,6 +58,9 @@ type Config struct {
 	SpockResolutionsWarnRows int `yaml:"spock_resolutions_warn_rows"`
 	SpockOldExceptionDays    int `yaml:"spock_old_exception_days"`
 
+	// ── Queries (G04) ──────────────────────────────────────
+	SlowQueryMeanWarnMs int `yaml:"slow_query_mean_warn_ms"`
+
 	// ── WAL Growth (G14) ───────────────────────────────────
 	WALRateWarnMBs            int     `yaml:"wal_rate_warn_mb_s"`
 	WALRateCritMBs            int     `yaml:"wal_rate_critical_mb_s"`
@@ -111,6 +114,7 @@ func Defaults() *Config {
 		WALReadyCritCount:          500,
 		LongQueryWarnSec:           60,
 		LongQueryCritSec:           300,
+		SlowQueryMeanWarnMs:        5000,
 		TxidWrapWarnMillion:        500,
 		TxidWrapCritMillion:        200,
 		ReplLagWarnBytes:           52428800,

@@ -29,6 +29,7 @@ func (g *G11Security) Run(ctx context.Context, db *pgxpool.Pool, cfg *config.Con
 	f = append(f, g11SSLCertPaths(ctx, db)...)
 	f = append(f, g11SuperuserCount(ctx, db)...)
 	f = append(f, g11PasswordEncryption(ctx, db)...)
+	f = append(f, g11UnencryptedConnections(ctx, db)...)
 	return f, nil
 }
 
@@ -244,6 +245,49 @@ func g11SuperuserCount(ctx context.Context, db *pgxpool.Pool) []Finding {
 		"Periodically audit superuser accounts.",
 		"",
 		"https://www.postgresql.org/docs/current/role-attributes.html")}
+}
+
+// G11-011 live client connections without SSL/TLS
+// Queries pg_stat_ssl to find non-local client backends connected without encryption.
+// Only flags connections from a real network address (client_addr IS NOT NULL),
+// which excludes Unix-socket and localhost loopback sessions.
+func g11UnencryptedConnections(ctx context.Context, db *pgxpool.Pool) []Finding {
+	var sslEnabled string
+	_ = db.QueryRow(ctx, "SELECT setting FROM pg_settings WHERE name='ssl'").Scan(&sslEnabled)
+	if sslEnabled == "off" {
+		return []Finding{NewWarn("G11-011", g11, "Unencrypted client connections",
+			"ssl=off — all connections are unencrypted",
+			"Enable SSL: set ssl=on in postgresql.conf and provide ssl_cert_file and ssl_key_file.",
+			"All client traffic is transmitted in plaintext, including credentials and query results.",
+			"https://www.postgresql.org/docs/current/ssl-tcp.html")}
+	}
+
+	const q = `SELECT count(*),
+		COALESCE(string_agg(a.usename || '@' || host(a.client_addr), ', ' ORDER BY a.usename), '') AS clients
+		FROM pg_stat_ssl s
+		JOIN pg_stat_activity a ON a.pid = s.pid
+		WHERE s.ssl = false
+		  AND a.backend_type = 'client backend'
+		  AND a.client_addr IS NOT NULL`
+	var cnt int64
+	var clients string
+	if err := db.QueryRow(ctx, q).Scan(&cnt, &clients); err != nil {
+		return []Finding{NewSkip("G11-011", g11, "Unencrypted client connections", err.Error())}
+	}
+	if cnt > 0 {
+		detail := fmt.Sprintf("Unencrypted connections: %s", clients)
+		if len(detail) > 300 {
+			detail = detail[:300] + "..."
+		}
+		return []Finding{NewWarn("G11-011", g11, "Unencrypted client connections",
+			fmt.Sprintf("%d non-local client connection(s) without SSL/TLS", cnt),
+			"Require SSL in pg_hba.conf: replace 'host' entries with 'hostssl' and reload.",
+			detail,
+			"https://www.postgresql.org/docs/current/ssl-tcp.html")}
+	}
+	return []Finding{NewOK("G11-011", g11, "Unencrypted client connections",
+		"All non-local client connections are using SSL/TLS",
+		"https://www.postgresql.org/docs/current/ssl-tcp.html")}
 }
 
 // G11-010 password_encryption setting

@@ -25,6 +25,7 @@ wal_ready_critical_count:    500
 # ── Queries & Locks ───────────────────────────────────────────
 long_query_warn_seconds:     60
 long_query_critical_seconds: 300
+slow_query_mean_warn_ms:     5000   # WARN if >10 query patterns have mean_exec_time > this (ms)
 
 # ── Vacuum / TXID ─────────────────────────────────────────────
 txid_wrap_warn_million:      500
@@ -45,7 +46,7 @@ spock_old_exception_days:       7
 # ── amcheck ───────────────────────────────────────────────────
 # List tables to run structural B-tree verification on.
 # amcheck_table_list: ["public.orders", "public.users"]
-amcheck_table_list: []
+amcheck_table_list: [kb_articles]
 
 # ── Cluster mode ──────────────────────────────────────────────
 # cluster_nodes: ["node1:5432", "node2:5432", "node3:5432"]

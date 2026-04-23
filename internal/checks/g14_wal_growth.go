@@ -449,11 +449,16 @@ func g14WALSegmentCount(ctx context.Context, db *pgxpool.Pool) []Finding {
 // ── G14-010  Unarchived WAL age ───────────────────────────────────────────────
 
 func g14UnarchivedAge(ctx context.Context, db *pgxpool.Pool) []Finding {
-	const q = `SELECT COALESCE(EXTRACT(EPOCH FROM (NOW() - last_archived_time))::bigint, -1),
-	                   archived_count, failed_count
-	            FROM pg_stat_archiver`
-	var ageSecs, archived, failed int64
-	if err := db.QueryRow(ctx, q).Scan(&ageSecs, &archived, &failed); err != nil {
+	// Use last_failed_time recency instead of cumulative failed_count so that old,
+	// resolved failures do not produce perpetual alerts.
+	const q = `SELECT
+		COALESCE(EXTRACT(EPOCH FROM (NOW() - last_archived_time))::bigint, -1) AS last_ok_secs,
+		archived_count,
+		failed_count,
+		COALESCE(EXTRACT(EPOCH FROM (NOW() - last_failed_time))::bigint, -1) AS last_fail_secs
+		FROM pg_stat_archiver`
+	var lastOKSecs, archived, failed, lastFailSecs int64
+	if err := db.QueryRow(ctx, q).Scan(&lastOKSecs, &archived, &failed, &lastFailSecs); err != nil {
 		return []Finding{NewSkip("G14-010", g14, "WAL archiver status", err.Error())}
 	}
 	if archived == 0 && failed == 0 {
@@ -462,14 +467,21 @@ func g14UnarchivedAge(ctx context.Context, db *pgxpool.Pool) []Finding {
 			"", "", "https://www.postgresql.org/docs/current/continuous-archiving.html")}
 	}
 	obs := fmt.Sprintf("Last archive: %s ago | archived: %d | failed: %d",
-		g14FmtSecs(ageSecs), archived, failed)
-	if failed > 0 {
-		return []Finding{NewWarn("G14-010", g14, "WAL archiver status", obs,
-			"Fix archiver errors — unarchived WAL accumulates in pg_wal and can fill the disk.",
-			fmt.Sprintf("%d archive failure(s) recorded", failed),
+		g14FmtSecs(lastOKSecs), archived, failed)
+	// Alert only on recent failures — ignore old resolved ones (lastFailSecs == -1 means never failed).
+	if lastFailSecs >= 0 && lastFailSecs < 3600 {
+		return []Finding{NewCrit("G14-010", g14, "WAL archiver status", obs,
+			"Fix archiver errors immediately — unarchived WAL fills pg_wal and can crash the server.",
+			fmt.Sprintf("Archive failure within the last %s; last_failed_time is recent", g14FmtSecs(lastFailSecs)),
 			"https://www.postgresql.org/docs/current/continuous-archiving.html")}
 	}
-	if ageSecs > 3600 {
+	if lastFailSecs >= 0 && lastFailSecs < 86400 {
+		return []Finding{NewWarn("G14-010", g14, "WAL archiver status", obs,
+			"Archive failure recorded in the last 24 hours — verify the archiver has fully recovered.",
+			fmt.Sprintf("Last failure was %s ago (cumulative failures: %d)", g14FmtSecs(lastFailSecs), failed),
+			"https://www.postgresql.org/docs/current/continuous-archiving.html")}
+	}
+	if lastOKSecs > 3600 {
 		return []Finding{NewWarn("G14-010", g14, "WAL archiver status", obs,
 			"Last successful archive was >1 hour ago — investigate the archiver process.",
 			"", "https://www.postgresql.org/docs/current/continuous-archiving.html")}

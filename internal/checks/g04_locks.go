@@ -30,6 +30,7 @@ func (g *G04Locks) Run(ctx context.Context, db *pgxpool.Pool, cfg *config.Config
 	f = append(f, g04TopQueries(ctx, db)...)
 	f = append(f, g04LogMinDuration(ctx, db)...)
 	f = append(f, g04LockTimeout(ctx, db)...)
+	f = append(f, g04SlowQueryCount(ctx, db, cfg)...)
 	return f, nil
 }
 
@@ -441,6 +442,40 @@ func g04LogMinDuration(ctx context.Context, db *pgxpool.Pool) []Finding {
 	return []Finding{NewOK("G04-009", g04, "log_min_duration_statement",
 		fmt.Sprintf("log_min_duration_statement = %sms", val),
 		"https://www.postgresql.org/docs/current/runtime-config-logging.html")}
+}
+
+// G04-011 slow query count from pg_stat_statements
+// Counts normalized query patterns whose mean execution time exceeds the threshold,
+// with at least 5 executions. Unlike G04-008 (top-N by cumulative time), this
+// reports how many distinct queries are routinely slow — a regression signal.
+func g04SlowQueryCount(ctx context.Context, db *pgxpool.Pool, cfg *config.Config) []Finding {
+	threshMs := float64(cfg.SlowQueryMeanWarnMs)
+	const q = `SELECT count(*), COALESCE(max(round(mean_exec_time::numeric, 2)), 0)
+		FROM pg_stat_statements
+		WHERE mean_exec_time > $1
+		  AND calls >= 5`
+	var cnt int64
+	var maxMean float64
+	if err := db.QueryRow(ctx, q, threshMs).Scan(&cnt, &maxMean); err != nil {
+		return []Finding{NewSkip("G04-011", g04, "Slow query count",
+			"pg_stat_statements not available: "+err.Error())}
+	}
+	obs := fmt.Sprintf("%d query pattern(s) with mean_exec_time > %.0fms (worst=%.0fms)", cnt, threshMs, maxMean)
+	if cnt > 10 {
+		return []Finding{NewWarn("G04-011", g04, "Slow query count", obs,
+			"Run EXPLAIN ANALYZE on the slowest queries from pg_stat_statements ORDER BY mean_exec_time DESC.",
+			fmt.Sprintf("%d distinct query patterns routinely exceed %.0fms mean execution time", cnt, threshMs),
+			"https://www.postgresql.org/docs/current/pgstatstatements.html")}
+	}
+	if cnt > 0 {
+		return []Finding{NewInfo("G04-011", g04, "Slow query count", obs,
+			fmt.Sprintf("Review: SELECT query, mean_exec_time FROM pg_stat_statements WHERE mean_exec_time > %.0f ORDER BY mean_exec_time DESC;", threshMs),
+			"",
+			"https://www.postgresql.org/docs/current/pgstatstatements.html")}
+	}
+	return []Finding{NewOK("G04-011", g04, "Slow query count",
+		fmt.Sprintf("No query patterns with mean_exec_time > %.0fms (min 5 executions)", threshMs),
+		"https://www.postgresql.org/docs/current/pgstatstatements.html")}
 }
 
 // G04-010 lock_timeout = 0

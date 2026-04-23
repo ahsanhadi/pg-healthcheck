@@ -167,16 +167,24 @@ func g13Conflicts(ctx context.Context, db *pgxpool.Pool) []Finding {
 		"https://www.postgresql.org/docs/current/hot-standby.html")}
 }
 
-// G13-007 max_connections > 200
+// G13-007 max_connections > 200 (INFO) or > 500 (WARN)
+// Values above 500 cause measurable lock manager and memory overhead even when connections
+// are idle. pgEdge AI-DBA-Workbench flags >500 as a warning for the same reason.
 func g13MaxConnections(ctx context.Context, db *pgxpool.Pool) []Finding {
 	var maxConn int
 	if err := db.QueryRow(ctx, "SELECT setting::int FROM pg_settings WHERE name='max_connections'").Scan(&maxConn); err != nil {
 		return []Finding{NewSkip("G13-007", g13, "max_connections advisory", err.Error())}
 	}
 	obs := fmt.Sprintf("max_connections = %d", maxConn)
+	if maxConn > 500 {
+		return []Finding{NewWarn("G13-007", g13, "max_connections advisory", obs,
+			"Deploy PgBouncer or Pgpool-II and reduce max_connections to ≤200.",
+			"max_connections > 500 degrades lock manager performance and wastes ~5-10MB RAM per slot even when idle.",
+			"https://www.pgbouncer.org/")}
+	}
 	if maxConn > 200 {
 		return []Finding{NewInfo("G13-007", g13, "max_connections advisory", obs,
-			"Deploy PgBouncer or Pgpool-II for connection pooling to reduce memory overhead.",
+			"Consider deploying PgBouncer or Pgpool-II for connection pooling to reduce memory overhead.",
 			"Each PostgreSQL connection uses ~5-10MB RAM; high max_connections wastes memory even when idle.",
 			"https://www.pgbouncer.org/")}
 	}
