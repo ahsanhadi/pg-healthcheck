@@ -308,9 +308,9 @@ func TestG09_InactiveSlot(t *testing.T) {
 		t.Error("G09-001 not found in output")
 		return
 	}
-	// Slot is inactive — should be WARN or CRIT depending on bytes retained
+	// Slot is inactive — must not be OK regardless of how much WAL has accumulated.
 	if c.Severity == "OK" {
-		t.Logf("G09-001: OK (slot may not have retained enough WAL yet — %s)", c.Observed)
+		t.Errorf("G09-001: expected INFO/WARN/CRIT for inactive slot, got OK — %s", c.Observed)
 	} else {
 		t.Logf("G09-001: %s — %s ✓", c.Severity, c.Observed)
 	}
@@ -383,7 +383,7 @@ func TestAllChecksPresent(t *testing.T) {
 		// G03
 		"G03-001", "G03-002", "G03-007", "G03-008",
 		// G04
-		"G04-001", "G04-002", "G04-003", "G04-004",
+		"G04-001", "G04-002", "G04-003", "G04-004", "G04-011",
 		// G05
 		"G05-001", "G05-002", "G05-003", "G05-012", "G05-013",
 		// G06
@@ -391,9 +391,11 @@ func TestAllChecksPresent(t *testing.T) {
 		// G09
 		"G09-001", "G09-004", "G09-009", "G09-014",
 		// G11
-		"G11-001", "G11-002", "G11-003", "G11-009", "G11-010",
+		"G11-001", "G11-002", "G11-003", "G11-009", "G11-010", "G11-011",
 		// G14
 		"G14-001", "G14-002", "G14-005", "G14-013",
+		// G15
+		"G15-001", "G15-002", "G15-003",
 	}
 
 	missing := 0

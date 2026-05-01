@@ -38,9 +38,13 @@ func (g *G09WALSlots) Run(ctx context.Context, db *pgxpool.Pool, cfg *config.Con
 }
 
 // G09-001 inactive slots lag
+// Physical slots use restart_lsn; logical slots use confirmed_flush_lsn.
+// Slots created with immediately_reserve=false have both LSNs NULL until a standby connects —
+// they are still dangerous (they retain WAL once a standby eventually connects) and warrant INFO.
 func g09InactiveSlots(ctx context.Context, db *pgxpool.Pool, cfg *config.Config) []Finding {
 	const q = `SELECT slot_name,
-		pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn) AS lag_bytes
+		(COALESCE(confirmed_flush_lsn, restart_lsn) IS NULL) AS lsn_null,
+		COALESCE(pg_wal_lsn_diff(pg_current_wal_lsn(), COALESCE(confirmed_flush_lsn, restart_lsn)), 0) AS lag_bytes
 		FROM pg_replication_slots
 		WHERE active = false
 		ORDER BY lag_bytes DESC LIMIT 10`
@@ -49,16 +53,26 @@ func g09InactiveSlots(ctx context.Context, db *pgxpool.Pool, cfg *config.Config)
 		return []Finding{NewSkip("G09-001", g09, "Inactive replication slot lag", err.Error())}
 	}
 	defer rows.Close()
-	var critLines, warnLines []string
+	var critLines, warnLines, infoLines []string
 	for rows.Next() {
 		var slot string
+		var lsnNull bool
 		var lagBytes int64
-		_ = rows.Scan(&slot, &lagBytes)
-		line := fmt.Sprintf("%s: lag=%dMB", slot, lagBytes/1024/1024)
-		if lagBytes >= cfg.ReplLagCritBytes {
+		if err := rows.Scan(&slot, &lsnNull, &lagBytes); err != nil {
+			continue
+		}
+		var line string
+		if lsnNull {
+			line = fmt.Sprintf("%s: WAL position not yet reserved", slot)
+		} else {
+			line = fmt.Sprintf("%s: lag=%dMB", slot, lagBytes/1024/1024)
+		}
+		if !lsnNull && lagBytes >= cfg.ReplLagCritBytes {
 			critLines = append(critLines, line)
-		} else if lagBytes >= cfg.ReplLagWarnBytes {
+		} else if !lsnNull && lagBytes >= cfg.ReplLagWarnBytes {
 			warnLines = append(warnLines, line)
+		} else {
+			infoLines = append(infoLines, line)
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -79,9 +93,16 @@ func g09InactiveSlots(ctx context.Context, db *pgxpool.Pool, cfg *config.Config)
 			strings.Join(warnLines, "\n"),
 			"https://www.postgresql.org/docs/current/view-pg-replication-slots.html"))
 	}
+	if len(infoLines) > 0 {
+		findings = append(findings, NewInfo("G09-001", g09, "Inactive replication slot lag",
+			fmt.Sprintf("%d inactive slot(s) with low or unknown lag", len(infoLines)),
+			"Verify these slots have active consumers; drop if unused.",
+			strings.Join(infoLines, "\n"),
+			"https://www.postgresql.org/docs/current/view-pg-replication-slots.html"))
+	}
 	if len(findings) == 0 {
 		return []Finding{NewOK("G09-001", g09, "Inactive replication slot lag",
-			"No inactive slots with significant lag",
+			"No inactive replication slots",
 			"https://www.postgresql.org/docs/current/view-pg-replication-slots.html")}
 	}
 	return findings
