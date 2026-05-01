@@ -39,7 +39,7 @@ var (
 	pgDBName = flag.String("pg-dbname", "postgres", "Database name")
 	pgUser   = flag.String("pg-user", "postgres", "PostgreSQL user")
 	pgPass   = flag.String("pg-pass", os.Getenv("PGPASSWORD"), "PostgreSQL password")
-	binary   = flag.String("binary", "../pg_healthcheck", "Path to pg_healthcheck binary")
+	binary   = flag.String("binary", "./pg_healthcheck", "Path to pg_healthcheck binary")
 )
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -174,8 +174,12 @@ func TestG05_DeadTuples(t *testing.T) {
 	defer teardown(t, pool)
 
 	mustExec(t, pool, `CREATE TABLE _hc_test.bloat(id serial PRIMARY KEY, data text)`)
-	mustExec(t, pool, `INSERT INTO _hc_test.bloat(data) SELECT repeat('x',200) FROM generate_series(1,5000)`)
+	// Insert 60k rows so that after 80% deletion (id%5!=0), 12k live rows remain.
+	// G05-003 requires n_live_tup > 10000 AND n_dead_tup > n_live_tup*0.2.
+	mustExec(t, pool, `INSERT INTO _hc_test.bloat(data) SELECT repeat('x',200) FROM generate_series(1,60000)`)
 	mustExec(t, pool, `DELETE FROM _hc_test.bloat WHERE id % 5 != 0`)
+	// Flush stats so pg_stat_user_tables reflects the new dead-tuple counts immediately.
+	mustExec(t, pool, `SELECT pg_stat_force_next_flush()`)
 	// do NOT vacuum — leave dead tuples in place
 
 	results := runHealthcheck(t, "--groups", "G05")

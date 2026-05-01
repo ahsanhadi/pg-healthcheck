@@ -1,6 +1,6 @@
 """
 Generate pg_healthcheck Check Reference PDF
-One line per check across all 14 groups.
+One line per check across all 15 groups.
 """
 
 from reportlab.lib.pagesizes import A4
@@ -89,6 +89,7 @@ CHECKS = [
     ("G04-008", "Reads pg_stat_statements for the top 10 queries by cumulative execution time"),
     ("G04-009", "Checks log_min_duration_statement; -1 means slow queries are never logged"),
     ("G04-010", "Warns when lock_timeout=0 — unbounded lock waits can cause connection pile-ups under contention"),
+    ("G04-011", "Counts normalized query patterns from pg_stat_statements whose mean execution time exceeds the configured threshold with ≥5 executions — a regression signal distinct from top-N cumulative time"),
 
     # G05 — Vacuum & Bloat
     ("G05-001", "Reads age(datfrozenxid) for every database; warns/criticals based on TXID wraparound thresholds"),
@@ -116,6 +117,7 @@ CHECKS = [
     ("G06-006", "Detects indexes whose leading columns are a prefix of another index on the same table"),
     ("G06-007", "Finds B-tree indexes on columns with very low cardinality — bitmap scans are usually better"),
     ("G06-008", "Checks BRIN index physical correlation against the indexed column; low correlation makes BRIN useless"),
+    ("G06-009", "Reports the pg_stat_bgwriter stats_reset timestamp as context for interpreting idx_scan=0 unused-index results"),
     ("G06-010", "Lists user tables with no primary key — required for logical replication and Spock cluster membership"),
 
     # G07 — TOAST & Data Integrity
@@ -152,6 +154,7 @@ CHECKS = [
     ("G09-014", "Measures time-based replication lag using write_lag/flush_lag/replay_lag from pg_stat_replication"),
 
     # G10 — Upgrade Readiness
+    ("G10-000", "Gate check: if --target-version is not configured, all G10 upgrade-readiness checks are skipped with a single advisory message"),
     ("G10-001", "Checks for tsearch2 and plpython2u extensions which are removed in PostgreSQL 14+"),
     ("G10-002", "Reads PostGIS version and notes any version-specific upgrade considerations"),
     ("G10-003", "Finds columns using deprecated abstime, reltime, or tinterval types removed in PG12+"),
@@ -179,6 +182,7 @@ CHECKS = [
     ("G11-008", "Reports the configured ssl_cert_file and ssl_key_file paths for manual permission verification"),
     ("G11-009", "Counts superuser login roles; more than 2 is a security risk as superusers bypass all access controls"),
     ("G11-010", "Checks password_encryption setting; md5 is deprecated and scram-sha-256 should be used"),
+    ("G11-011", "Counts client connections using unencrypted (non-SSL) transport from pg_stat_ssl; warns when any exist on non-loopback addresses"),
 
     # G12 — pgEdge / Spock Cluster
     ("G12-000", "Gate check: if Spock is not installed on any node, all G12 checks are skipped with a single clear message"),
@@ -219,6 +223,11 @@ CHECKS = [
     ("G13-010", "Runs syscall.Statfs on the data_directory path; warns at 80% used, critical at 90% (local execution only)"),
     ("G13-011", "Queries pg_postmaster_start_time(); warns if restarted within 1 hour (possible crash), info within 24 hours"),
 
+    # G15 — Replication Health
+    ("G15-001", "On standbys, checks pg_stat_wal_receiver for an active WAL receiver process and warns if last message from primary is >5 minutes old"),
+    ("G15-002", "On primaries, finds inactive physical replication slots where the standby has disconnected and WAL is accumulating"),
+    ("G15-003", "On standbys, breaks down pg_stat_database_conflicts by type (snapshot, lock, bufferpin, deadlock, logicalslot) with root-cause guidance"),
+
     # G14 — WAL Growth & Generation Rate
     ("G14-001", "Reads pg_ls_waldir() to get total size of pg_wal directory and compares against configured thresholds"),
     ("G14-002", "Takes two LSN samples bracketing other checks and calculates WAL generation rate in MB/s"),
@@ -252,6 +261,7 @@ GROUPS = [
     ("G12", "pgEdge / Spock Cluster"),
     ("G13", "OS & Resource-Level"),
     ("G14", "WAL Growth & Generation Rate"),
+    ("G15", "Replication Health"),
 ]
 
 def build_pdf():
@@ -264,7 +274,7 @@ def build_pdf():
         bottomMargin=20*mm,
         title="pg_healthcheck — Check Reference",
         author="pg_healthcheck",
-        subject="All 180 checks, one line each",
+        subject="All checks, one line each",
     )
 
     styles = getSampleStyleSheet()
@@ -299,7 +309,7 @@ def build_pdf():
     story.append(Spacer(1, 4*mm))
     story.append(Paragraph("pg_healthcheck", title_style))
     story.append(Paragraph(
-        f"Check Reference &nbsp;·&nbsp; 180 checks across 14 groups &nbsp;·&nbsp; {date.today().strftime('%d %B %Y')}",
+        f"Check Reference &nbsp;·&nbsp; {len(CHECKS)} checks across {len(GROUPS)} groups &nbsp;·&nbsp; {date.today().strftime('%d %B %Y')}",
         subtitle_style))
     story.append(HRFlowable(width="100%", thickness=1.5, color=MID_BLUE, spaceAfter=5*mm))
 
