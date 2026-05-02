@@ -37,7 +37,7 @@ func (g *G01Connection) Run(ctx context.Context, db *pgxpool.Pool, cfg *config.C
 	f = append(f, g01TCPReach(cfg)...)
 	f = append(f, g01RTT(ctx, db, cfg)...)
 	f = append(f, g01SSL(ctx, db)...)
-	f = append(f, g01TLSExpiry(cfg)...)
+	f = append(f, g01TLSExpiry(ctx, db, cfg)...)
 	f = append(f, g01VersionEOL(ctx, db)...)
 	f = append(f, g01ConnSaturation(ctx, db, cfg)...)
 	f = append(f, g01IdleInTx(ctx, db, cfg)...)
@@ -97,7 +97,13 @@ func g01SSL(ctx context.Context, db *pgxpool.Pool) []Finding {
 }
 
 // G01-004 TLS certificate expiry
-func g01TLSExpiry(cfg *config.Config) []Finding {
+func g01TLSExpiry(ctx context.Context, db *pgxpool.Pool, cfg *config.Config) []Finding {
+	// Skip cert check when ssl=off — a TLS dial would return EOF and mislead the operator.
+	var sslSetting string
+	if err := db.QueryRow(ctx, "SELECT setting FROM pg_settings WHERE name='ssl'").Scan(&sslSetting); err == nil && sslSetting != "on" {
+		return []Finding{NewSkip("G01-004", g01, "TLS certificate expiry",
+			"ssl=off — enable ssl in postgresql.conf to check certificate expiry")}
+	}
 	addr := net.JoinHostPort(cfg.Host, fmt.Sprintf("%d", cfg.Port))
 	conn, err := tls.DialWithDialer(
 		&net.Dialer{Timeout: cfg.ConnectionTimeout},
