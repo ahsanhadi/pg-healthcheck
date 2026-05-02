@@ -6,7 +6,6 @@ import (
 	"os"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -248,38 +247,31 @@ func g13CPUGovernor() []Finding {
 }
 
 // G13-010 Data directory filesystem free space
-// Queries the PostgreSQL data_directory path and checks available disk space via
-// syscall.Statfs. The data directory may be on a different filesystem than pg_wal
+// Queries the PostgreSQL data_directory path and checks available disk space.
+// The data directory may be on a different filesystem than pg_wal
 // (checked by G14-013), so both checks are needed.
 func g13DataDirFreeSpace(ctx context.Context, db *pgxpool.Pool) []Finding {
 	var dataDir string
 	if err := db.QueryRow(ctx, "SELECT setting FROM pg_settings WHERE name='data_directory'").Scan(&dataDir); err != nil {
 		return []Finding{NewSkip("G13-010", g13, "Data directory disk space", err.Error())}
 	}
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(dataDir, &stat); err != nil {
+	pct, totalGB, freeGB, err := diskFreeStats(dataDir)
+	if err != nil {
 		if os.IsPermission(err) {
 			return []Finding{NewInfo("G13-010", g13, "Data directory disk space",
 				fmt.Sprintf("Permission denied reading filesystem stats for %s", dataDir),
 				"Run pg_healthcheck as the postgres OS user or grant read access to the data directory.",
-				fmt.Sprintf("syscall.Statfs error: %v", err),
+				err.Error(),
 				"https://www.postgresql.org/docs/current/storage-file-layout.html")}
 		}
 		return []Finding{NewInfo("G13-010", g13, "Data directory disk space",
 			fmt.Sprintf("Filesystem stat requires local execution (data_directory: %s)", dataDir),
 			"Run pg_healthcheck directly on the PostgreSQL host — not via a remote connection.",
-			fmt.Sprintf("syscall.Statfs error: %v", err),
+			err.Error(),
 			"https://www.postgresql.org/docs/current/storage-file-layout.html")}
 	}
-	bsize := uint64(stat.Bsize) //nolint:unconvert
-	total := stat.Blocks * bsize
-	avail := stat.Bavail * bsize
-	pct := 0
-	if total > 0 {
-		pct = int(float64(total-avail) / float64(total) * 100)
-	}
 	obs := fmt.Sprintf("Data directory filesystem %d%% used (%.1f GB free of %.1f GB)",
-		pct, float64(avail)/1024/1024/1024, float64(total)/1024/1024/1024)
+		pct, freeGB, totalGB)
 	if pct >= 90 {
 		return []Finding{NewCrit("G13-010", g13, "Data directory disk space", obs,
 			"Free space immediately — PostgreSQL will crash when the data directory filesystem is full.",

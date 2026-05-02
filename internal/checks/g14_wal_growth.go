@@ -21,7 +21,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -563,33 +562,23 @@ func g14WALFilesystemPct(ctx context.Context, db *pgxpool.Pool, cfg *config.Conf
 	}
 	walPath := filepath.Join(dataDir, "pg_wal")
 
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(walPath, &stat); err != nil {
+	pct, totalGB, freeGB, err := diskFreeStats(walPath)
+	if err != nil {
 		if os.IsPermission(err) {
 			return []Finding{NewInfo("G14-013", g14, "pg_wal filesystem usage",
 				fmt.Sprintf("pg_wal filesystem check: permission denied (path: %s)", walPath),
 				"Grant the OS user running pg_healthcheck read access to the data directory, or run as the postgres user.",
-				fmt.Sprintf("syscall.Statfs error: %v", err),
+				err.Error(),
 				"https://www.postgresql.org/docs/current/wal-configuration.html")}
 		}
 		return []Finding{NewInfo("G14-013", g14, "pg_wal filesystem usage",
 			fmt.Sprintf("pg_wal filesystem check requires local execution (path: %s)", walPath),
 			"Run pg_healthcheck directly on the PostgreSQL host — not via a remote connection.",
-			fmt.Sprintf("syscall.Statfs error: %v", err),
+			err.Error(),
 			"https://www.postgresql.org/docs/current/wal-configuration.html")}
 	}
-
-	// Bsize is int32 on Darwin, int64 on Linux — casting to uint64 is safe for positive values
-	bsize := uint64(stat.Bsize) //nolint:unconvert
-	total := stat.Blocks * bsize
-	avail := stat.Bavail * bsize
-	used := total - avail
-	pct := 0
-	if total > 0 {
-		pct = int(float64(used) / float64(total) * 100)
-	}
 	obs := fmt.Sprintf("pg_wal filesystem %d%% used  (%.1f GB free of %.1f GB total)",
-		pct, float64(avail)/1024/1024/1024, float64(total)/1024/1024/1024)
+		pct, freeGB, totalGB)
 
 	warnPct := cfg.WALFilesystemWarnPct
 	critPct := cfg.WALFilesystemCritPct
