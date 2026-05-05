@@ -3,7 +3,7 @@
 > Enterprise-grade PostgreSQL health diagnostics for single instances and pgEdge multi-node Spock clusters.
 
 ![CI](https://github.com/ahsanhadi/pg_healthcheck/actions/workflows/ci.yml/badge.svg)
-![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go&logoColor=white)
+![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-13+-336791?logo=postgresql&logoColor=white)
 ![License](https://img.shields.io/badge/license-PostgreSQL-blue)
 ![Platforms](https://img.shields.io/badge/platforms-linux%20%7C%20macOS%20%7C%20windows-lightgrey)
@@ -193,7 +193,7 @@ cd pg_healthcheck
 go build -o pg_healthcheck ./cmd/pg_healthcheck/
 ```
 
-Requires Go 1.23+. Install with `brew install go` on macOS or `apt install golang-go` on Ubuntu.
+Requires Go 1.25+. Install with `brew install go` on macOS or `apt install golang-go` on Ubuntu.
 
 ### Run against a local database
 
@@ -418,6 +418,20 @@ amcheck_table_list:          # tables to run structural B-tree checks on
 > Leave as `[]` to skip amcheck entirely. Add your most critical indexed tables here.
 > Requires the `amcheck` extension: `CREATE EXTENSION amcheck;`
 
+#### pg_visibility — VM integrity checks (G08)
+
+```yaml
+pg_visibility_table_list:    # tables to run pg_check_visible() and pg_check_frozen() on
+  - public.orders
+  - public.accounts
+```
+
+> Leave as `[]` to skip G08-006 entirely. Add your most critical tables here.
+> Requires the `pg_visibility` extension: `CREATE EXTENSION pg_visibility;`
+> G08-006 detects file-level visibility map / heap mismatches — the class of corruption
+> where a page is marked ALL_FROZEN in the VM but still contains unfrozen tuples.
+> This state cannot be detected by VACUUM and can persist silently across major version upgrades.
+
 #### WAL growth & generation rate (G14)
 
 ```yaml
@@ -498,13 +512,28 @@ check_timeout_seconds: 30
 | G05 | Vacuum & Bloat | 11 |
 | G06 | Indexes | 9 |
 | G07 | TOAST & Data Integrity | 9 |
-| G08 | Visibility Map | 5 |
+| G08 | Visibility Map | 6 |
 | G09 | WAL & Replication Slots | 13 |
 | G10 | Upgrade Readiness | 15 |
 | G11 | Security | 8 |
 | G12 | pgEdge / Spock Cluster | 20 |
 | G13 | OS & Resource-Level | 11 |
 | G14 | WAL Growth & Generation Rate | 14 |
+
+### G08 — Visibility Map
+
+| Check | What it detects |
+|---|---|
+| G08-001 | Tables with disproportionately high heap block reads relative to index scans |
+| G08-002 | `relallvisible > relpages` in pg_class — stale or corrupted VM catalog statistics |
+| G08-003 | Post-crash visibility map advisory — recommends VACUUM after unclean shutdown |
+| G08-004 | pg_visibility extension installation status |
+| G08-005 | Tables with suspiciously low dead tuple counts despite high write activity |
+| G08-006 | **File-level VM/heap mismatches via pg_check_visible() and pg_check_frozen()** — detects pages the VM marks ALL_FROZEN that still contain unfrozen tuples; requires `pg_visibility` extension and `pg_visibility_table_list` in `healthcheck.yaml` |
+
+> G08-006 catches the specific corruption class where `vacuumlazy.c` sets `VISIBILITYMAP_ALL_FROZEN`
+> without `VISIBILITYMAP_ALL_VISIBLE` due to a race condition fixed in PG 10.4 (commit `e1d634758e4`).
+> Corruption from older versions can persist silently through upgrades — only `pg_check_frozen()` surfaces it.
 
 ### G09 — WAL & Replication Slots (recent additions)
 
@@ -636,7 +665,7 @@ pg_healthcheck/
 │   │   ├── g05_vacuum.go        Vacuum & bloat (11 checks)
 │   │   ├── g06_indexes.go       Indexes (9 checks)
 │   │   ├── g07_toast.go         TOAST & data integrity (9 checks)
-│   │   ├── g08_visibility.go    Visibility map (5 checks)
+│   │   ├── g08_visibility.go    Visibility map (6 checks)
 │   │   ├── g09_wal_slots.go     WAL & replication slots (13 checks)
 │   │   ├── g10_upgrade.go       Upgrade readiness (15 checks)
 │   │   ├── g11_security.go      Security (8 checks)
@@ -662,11 +691,12 @@ pg_healthcheck/
 
 ## Requirements
 
-- **Go 1.23+** — install with `brew install go`
+- **Go 1.25+** — install with `brew install go`
 - **PostgreSQL 13+** — checks that need PG 14/15/16/17 skip gracefully on older versions
 - **`pg_monitor` role** — recommended minimum privilege; grants access to all catalog views and `pg_stat_*` functions without superuser. Some checks (G11 security inspection, `amcheck` index verification) benefit from superuser privileges and will skip or return partial results without them
 - **pgBackRest** — G02 checks skip gracefully with a clear message if pgBackRest is not installed; no config needed on non-pgBackRest environments
 - **amcheck extension** — G07 B-tree and heap integrity checks skip if not installed (`CREATE EXTENSION amcheck`)
+- **pg_visibility extension** — G08-006 VM integrity checks (pg_check_visible / pg_check_frozen) skip if not installed (`CREATE EXTENSION pg_visibility`). Tables to scan must be listed in `pg_visibility_table_list` in `healthcheck.yaml`
 - **pgEdge Spock extension** — G12 emits a single INFO finding and skips all 20 checks if Spock is not installed; safe to run on standard PostgreSQL
 - **Local execution** — required for G13-010 (data directory disk space) and G14-013 (pg_wal filesystem); both use `syscall.Statfs` and must run on the PostgreSQL host. Remote connections receive a graceful INFO skip
 
