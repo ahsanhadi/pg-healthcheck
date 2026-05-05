@@ -590,3 +590,95 @@ func TestG04_NoLockBlockingPath(t *testing.T) {
 		t.Fatalf("expected empty detail in no-contention path, got: %q", c.Detail)
 	}
 }
+
+// TestG07_TOASTCorruption verifies that G07-003 fires CRITICAL when a table's
+// reltoastrelid points to a non-existent pg_class entry (broken TOAST reference),
+// and that G07-005 fires WARN when a TOAST table has no parent (orphaned).
+func TestG07_TOASTCorruption(t *testing.T) {
+	pool := db(t)
+	defer pool.Close()
+	setupSchema(t, pool)
+	defer teardown(t, pool)
+
+	// Create a table large enough to get a real TOAST table allocated.
+	mustExec(t, pool, `CREATE TABLE _hc_test.toast_corrupt(id serial PRIMARY KEY, data text)`)
+	mustExec(t, pool, `INSERT INTO _hc_test.toast_corrupt(data) SELECT repeat('x', 10000) FROM generate_series(1, 5)`)
+
+	// Verify the table actually got a TOAST table before we corrupt it.
+	var toastOID uint32
+	err := pool.QueryRow(context.Background(),
+		`SELECT reltoastrelid FROM pg_class WHERE oid = '_hc_test.toast_corrupt'::regclass`).Scan(&toastOID)
+	if err != nil || toastOID == 0 {
+		t.Skipf("table has no TOAST table (toastOID=%d, err=%v) — skipping", toastOID, err)
+	}
+	t.Logf("original reltoastrelid = %d", toastOID)
+
+	// Break the reltoastrelid pointer — point it to a non-existent OID.
+	// This creates the dangling reference that G07-003 detects.
+	mustExec(t, pool,
+		`UPDATE pg_class SET reltoastrelid = 2147483647 WHERE oid = '_hc_test.toast_corrupt'::regclass`)
+
+	results := runHealthcheck(t, "--groups", "G07")
+
+	// G07-003: broken reltoastrelid → CRITICAL
+	c003, ok := results["G07-003"]
+	if !ok {
+		t.Error("G07-003 not found in output")
+	} else if c003.Severity != "CRITICAL" {
+		t.Errorf("G07-003: expected CRITICAL for broken TOAST ref, got %s — %s", c003.Severity, c003.Observed)
+	} else {
+		t.Logf("G07-003: %s — %s ✓", c003.Severity, c003.Observed)
+	}
+
+	// G07-005: the original TOAST table now has no parent → WARN
+	c005, ok := results["G07-005"]
+	if !ok {
+		t.Error("G07-005 not found in output")
+	} else if c005.Severity != "WARN" {
+		t.Errorf("G07-005: expected WARN for orphaned TOAST table, got %s — %s", c005.Severity, c005.Observed)
+	} else {
+		t.Logf("G07-005: %s — %s ✓", c005.Severity, c005.Observed)
+	}
+
+	// Restore the pointer so teardown can DROP SCHEMA cleanly.
+	mustExec(t, pool,
+		`UPDATE pg_class SET reltoastrelid = $1 WHERE oid = '_hc_test.toast_corrupt'::regclass`, toastOID)
+}
+
+// TestG08_VMHeapMismatch verifies that G08-002 fires WARN when pg_class.relallvisible
+// exceeds relpages — the catalog-level signal for a stale or corrupt visibility map.
+func TestG08_VMHeapMismatch(t *testing.T) {
+	pool := db(t)
+	defer pool.Close()
+	setupSchema(t, pool)
+	defer teardown(t, pool)
+
+	mustExec(t, pool, `CREATE TABLE _hc_test.vm_mismatch(id serial PRIMARY KEY, data text)`)
+	mustExec(t, pool, `INSERT INTO _hc_test.vm_mismatch(data) SELECT repeat('y', 100) FROM generate_series(1, 500)`)
+	// VACUUM sets relallvisible = relpages (legitimate state).
+	mustExec(t, pool, `VACUUM _hc_test.vm_mismatch`)
+
+	// Confirm relpages > 0 before we inject the mismatch.
+	var relpages int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT relpages FROM pg_class WHERE oid = '_hc_test.vm_mismatch'::regclass`).Scan(&relpages); err != nil || relpages == 0 {
+		t.Skipf("relpages=%d after VACUUM — cannot inject mismatch (err=%v)", relpages, err)
+	}
+
+	// Inject: set relallvisible to relpages + 20 (impossible, signals VM corruption).
+	mustExec(t, pool,
+		`UPDATE pg_class SET relallvisible = relpages + 20 WHERE oid = '_hc_test.vm_mismatch'::regclass`)
+	t.Logf("injected: relpages=%d relallvisible=%d", relpages, relpages+20)
+
+	results := runHealthcheck(t, "--groups", "G08")
+
+	c, ok := results["G08-002"]
+	if !ok {
+		t.Fatal("G08-002 not found in output")
+	}
+	if c.Severity != "WARN" {
+		t.Errorf("G08-002: expected WARN for relallvisible > relpages, got %s — %s", c.Severity, c.Observed)
+	} else {
+		t.Logf("G08-002: %s — %s ✓", c.Severity, c.Observed)
+	}
+}

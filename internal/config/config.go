@@ -76,6 +76,9 @@ type Config struct {
 	// ── amcheck ────────────────────────────────────────────
 	AmcheckTableList []string `yaml:"amcheck_table_list"`
 
+	// ── pg_visibility ──────────────────────────────────────
+	PgVisibilityTableList []string `yaml:"pg_visibility_table_list"`
+
 	// ── Cluster mode ───────────────────────────────────────
 	ClusterNodes               []string `yaml:"cluster_nodes"`
 	CrossNodeTables            []string `yaml:"cross_node_tables"`

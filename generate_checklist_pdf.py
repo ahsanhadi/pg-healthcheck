@@ -136,6 +136,7 @@ CHECKS = [
     ("G08-003", "After an unclean shutdown, advises running VACUUM ANALYZE to ensure visibility map accuracy"),
     ("G08-004", "Checks whether the pg_visibility extension is installed for deeper visibility map diagnostics"),
     ("G08-005", "Flags tables where n_dead_tup is suspiciously low despite high n_tup_upd — may indicate tracking issues"),
+    ("G08-006", "Runs pg_check_visible() and pg_check_frozen() on configured tables to detect file-level VM/heap mismatches that autovacuum cannot self-heal (requires pg_visibility extension)"),
 
     # G09 — WAL & Replication Slots
     ("G09-001", "Finds inactive replication slots with retained WAL exceeding the configured warning threshold"),

@@ -48,6 +48,12 @@ spock_old_exception_days:       7
 # amcheck_table_list: ["public.orders", "public.users"]
 amcheck_table_list: [kb_articles]
 
+# ── pg_visibility ──────────────────────────────────────────
+# Tables to run pg_check_visible() and pg_check_frozen() on (G08-006).
+# Requires: CREATE EXTENSION pg_visibility;
+# pg_visibility_table_list: ["public.orders", "public.users"]
+pg_visibility_table_list: []
+
 # ── Cluster mode ──────────────────────────────────────────────
 # cluster_nodes: ["node1:5432", "node2:5432", "node3:5432"]
 cluster_nodes: []

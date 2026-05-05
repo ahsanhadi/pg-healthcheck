@@ -24,6 +24,7 @@ func (g *G08Visibility) Run(ctx context.Context, db *pgxpool.Pool, cfg *config.C
 	f = append(f, g08PostCrashVM(ctx, db)...)
 	f = append(f, g08PgVisibilityExtension(ctx, db)...)
 	f = append(f, g08SuspiciousLowDeadTup(ctx, db)...)
+	f = append(f, g08VMIntegrityCheck(ctx, db, cfg)...)
 	return f, nil
 }
 
@@ -183,4 +184,63 @@ func g08SuspiciousLowDeadTup(ctx context.Context, db *pgxpool.Pool) []Finding {
 		"Stats may have been reset; verify with pg_stat_reset() history and autovacuum logs.",
 		strings.Join(lines, "\n"),
 		"https://www.postgresql.org/docs/current/monitoring-stats.html")}
+}
+
+// G08-006 VM integrity check via pg_visibility extension
+// pg_check_visible() finds heap pages the VM marks all-visible that still
+// contain dead or not-yet-visible tuples — the real file-level VM/heap mismatch
+// that autovacuum cannot self-heal.  pg_check_frozen() finds pages the VM
+// marks all-frozen that contain tuples not yet frozen.
+// Configure tables to check via pg_visibility_table_list in healthcheck.yaml.
+func g08VMIntegrityCheck(ctx context.Context, db *pgxpool.Pool, cfg *config.Config) []Finding {
+	var installed bool
+	if err := db.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname='pg_visibility')`).Scan(&installed); err != nil {
+		return []Finding{NewSkip("G08-006", g08, "VM integrity (pg_visibility)", err.Error())}
+	}
+	if !installed {
+		return []Finding{NewSkip("G08-006", g08, "VM integrity (pg_visibility)",
+			"pg_visibility extension not installed — run: CREATE EXTENSION pg_visibility")}
+	}
+	if len(cfg.PgVisibilityTableList) == 0 {
+		return []Finding{NewInfo("G08-006", g08, "VM integrity (pg_visibility)",
+			"pg_visibility installed but no tables configured",
+			"Add tables to pg_visibility_table_list in healthcheck.yaml to enable page-level VM checks.",
+			"",
+			"https://www.postgresql.org/docs/current/pgvisibility.html")}
+	}
+
+	var critLines []string
+	for _, tbl := range cfg.PgVisibilityTableList {
+		var visCount, frozenCount int64
+
+		if err := db.QueryRow(ctx,
+			`SELECT count(*) FROM pg_check_visible($1::regclass)`, tbl).Scan(&visCount); err != nil {
+			critLines = append(critLines, fmt.Sprintf("%s: pg_check_visible error: %v", tbl, err))
+			continue
+		}
+		if err := db.QueryRow(ctx,
+			`SELECT count(*) FROM pg_check_frozen($1::regclass)`, tbl).Scan(&frozenCount); err != nil {
+			critLines = append(critLines, fmt.Sprintf("%s: pg_check_frozen error: %v", tbl, err))
+			continue
+		}
+
+		if visCount > 0 || frozenCount > 0 {
+			critLines = append(critLines, fmt.Sprintf(
+				"%s: %d all-visible violation(s), %d all-frozen violation(s)",
+				tbl, visCount, frozenCount))
+		}
+	}
+
+	if len(critLines) > 0 {
+		return []Finding{NewCrit("G08-006", g08, "VM integrity (pg_visibility)",
+			fmt.Sprintf("%d table(s) have VM/heap mismatches", len(critLines)),
+			"Run VACUUM FREEZE on affected tables; restore from backup if corruption persists.",
+			strings.Join(critLines, "\n"),
+			"https://www.postgresql.org/docs/current/pgvisibility.html")}
+	}
+	return []Finding{NewOK("G08-006", g08, "VM integrity (pg_visibility)",
+		fmt.Sprintf("All %d configured table(s) passed pg_check_visible and pg_check_frozen",
+			len(cfg.PgVisibilityTableList)),
+		"https://www.postgresql.org/docs/current/pgvisibility.html")}
 }
