@@ -1,8 +1,8 @@
-# pg_healthcheck
+# pg-healthcheck
 
 > Enterprise-grade PostgreSQL health diagnostics for single instances and pgEdge multi-node Spock clusters.
 
-![CI](https://github.com/ahsanhadi/pg_healthcheck/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/ahsanhadi/pg-healthcheck/actions/workflows/ci.yml/badge.svg)
 ![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-13+-336791?logo=postgresql&logoColor=white)
 ![License](https://img.shields.io/badge/license-PostgreSQL-blue)
@@ -18,7 +18,7 @@ If you are new to Go, this section explains how all the pieces fit together befo
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  You run:  ./pg_healthcheck --host db1 --dbname mydb             │
+│  You run:  ./pg-healthcheck --host db1 --dbname mydb             │
 └───────────────────────────┬─────────────────────────────────────┘
                             │
                     ┌───────▼────────┐
@@ -50,7 +50,7 @@ If you are new to Go, this section explains how all the pieces fit together befo
 
 ### The five layers explained simply
 
-**1. CLI layer (`cmd/pg_healthcheck/main.go`)**
+**1. CLI layer (`cmd/pg-healthcheck/main.go`)**
 This is where `main()` lives. It uses a library called Cobra to define all the `--flags` you pass on the command line. Once the flags are parsed, it calls `run()` which orchestrates everything else. Think of this as the "front door" of the application.
 
 **2. Configuration layer (`internal/config/config.go`)**
@@ -170,17 +170,17 @@ If two of these are simultaneously CRITICAL, the reporter prints a **composite a
 
 ### Download a release (no Go required)
 
-Pre-built binaries for Linux, macOS, and Windows are available on the [Releases page](https://github.com/ahsanhadi/pg_healthcheck/releases).
+Pre-built binaries for Linux, macOS, and Windows are available on the [Releases page](https://github.com/ahsanhadi/pg-healthcheck/releases).
 
 ```bash
 # macOS (Apple Silicon)
-curl -L https://github.com/ahsanhadi/pg_healthcheck/releases/latest/download/pg_healthcheck_macOS_arm64.tar.gz | tar xz
+curl -L https://github.com/ahsanhadi/pg-healthcheck/releases/latest/download/pg-healthcheck_macOS_arm64.tar.gz | tar xz
 
 # macOS (Intel)
-curl -L https://github.com/ahsanhadi/pg_healthcheck/releases/latest/download/pg_healthcheck_macOS_amd64.tar.gz | tar xz
+curl -L https://github.com/ahsanhadi/pg-healthcheck/releases/latest/download/pg-healthcheck_macOS_amd64.tar.gz | tar xz
 
 # Linux (amd64)
-curl -L https://github.com/ahsanhadi/pg_healthcheck/releases/latest/download/pg_healthcheck_linux_amd64.tar.gz | tar xz
+curl -L https://github.com/ahsanhadi/pg-healthcheck/releases/latest/download/pg-healthcheck_linux_amd64.tar.gz | tar xz
 ```
 
 Each archive includes the binary, `LICENSE`, `README.md`, and a ready-to-edit `healthcheck.yaml`.
@@ -188,9 +188,9 @@ Each archive includes the binary, `LICENSE`, `README.md`, and a ready-to-edit `h
 ### Build from source
 
 ```bash
-git clone https://github.com/ahsanhadi/pg_healthcheck.git
-cd pg_healthcheck
-go build -o pg_healthcheck ./cmd/pg_healthcheck/
+git clone https://github.com/ahsanhadi/pg-healthcheck.git
+cd pg-healthcheck
+go build -o pg-healthcheck ./cmd/pg-healthcheck/
 ```
 
 Requires Go 1.25+. Install with `brew install go` on macOS or `apt install golang-go` on Ubuntu.
@@ -198,38 +198,38 @@ Requires Go 1.25+. Install with `brew install go` on macOS or `apt install golan
 ### Run against a local database
 
 ```bash
-./pg_healthcheck --host localhost --port 5432 --dbname mydb --user postgres
+./pg-healthcheck --host localhost --port 5432 --dbname mydb --user postgres
 ```
 
 ### Password — use an environment variable
 
 ```bash
-PGPASSWORD=secret ./pg_healthcheck --host db1 --dbname prod --user postgres
+PGPASSWORD=secret ./pg-healthcheck --host db1 --dbname prod --user postgres
 ```
 
 ### Run only specific groups
 
 ```bash
-./pg_healthcheck --groups G01,G05,G09,G14
+./pg-healthcheck --groups G01,G05,G09,G14
 ```
 
 ### Show all checks including OK ones
 
 ```bash
-./pg_healthcheck --verbose
+./pg-healthcheck --verbose
 ```
 
 ### JSON output (for GUI or scripting)
 
 ```bash
-./pg_healthcheck --output json | jq '.summary'
-./pg_healthcheck --output json > report.json
+./pg-healthcheck --output json | jq '.summary'
+./pg-healthcheck --output json > report.json
 ```
 
 ### Cluster mode (pgEdge / Spock)
 
 ```bash
-./pg_healthcheck \
+./pg-healthcheck \
   --mode cluster \
   --nodes node1:5432,node2:5432,node3:5432 \
   --dbname mydb --user postgres
@@ -242,7 +242,7 @@ PGPASSWORD=secret ./pg_healthcheck --host db1 --dbname prod --user postgres
 ### Upgrade readiness check
 
 ```bash
-./pg_healthcheck --groups G10 --target-version 17
+./pg-healthcheck --groups G10 --target-version 17
 ```
 
 ---
@@ -289,13 +289,13 @@ You never have to edit the file. But tuning it is how you make the tool fit your
 The tool looks for `healthcheck.yaml` in the **current working directory** automatically. To use a different path pass `--config`:
 
 ```bash
-./pg_healthcheck --config /etc/pg_healthcheck/prod.yaml
+./pg-healthcheck --config /etc/pg-healthcheck/prod.yaml
 ```
 
 A common pattern is one file per environment:
 
 ```
-/etc/pg_healthcheck/
+/etc/pg-healthcheck/
     prod.yaml
     staging.yaml
     dev.yaml
@@ -322,7 +322,7 @@ config warning: parsing config prod.yaml: yaml: line 12: ...
 ### Test your file before deploying
 
 ```bash
-./pg_healthcheck --config /etc/pg_healthcheck/prod.yaml --groups G01 --verbose
+./pg-healthcheck --config /etc/pg-healthcheck/prod.yaml --groups G01 --verbose
 ```
 
 ---
@@ -450,11 +450,11 @@ wal_fpi_ratio_warn:            0.40  # WARN if full-page writes exceed 40% of al
 wal_filesystem_warn_pct:        60   # WARN if the pg_wal filesystem is >60% full
 wal_filesystem_critical_pct:    80   # CRITICAL at >80% — pg_wal exhaustion crashes PostgreSQL
 
-wal_rate_state_file: /var/lib/pg_healthcheck/wal_rate.json   # where to store the rolling baseline
+wal_rate_state_file: /var/lib/pg-healthcheck/wal_rate.json   # where to store the rolling baseline
 ```
 
 > **Important:** Change `wal_rate_state_file` from `/tmp/` to a persistent path like
-> `/var/lib/pg_healthcheck/`. Files in `/tmp/` are cleared on reboot and the rolling
+> `/var/lib/pg-healthcheck/`. Files in `/tmp/` are cleared on reboot and the rolling
 > baseline resets, giving false spike alerts on startup.
 >
 > Set `wal_dir_warn_gb` to roughly 40% of your actual pg_wal partition size, and
@@ -476,7 +476,7 @@ check_timeout_seconds: 10   # each individual check is cancelled after this many
 You do not need to include every key — only what differs from the defaults:
 
 ```yaml
-# /etc/pg_healthcheck/prod.yaml
+# /etc/pg-healthcheck/prod.yaml
 
 # Our backups run every 12 hours
 backup_max_age_hours:        13
@@ -493,7 +493,7 @@ wal_filesystem_warn_pct:     50
 wal_filesystem_critical_pct: 70
 
 # Persistent baseline file
-wal_rate_state_file: /var/lib/pg_healthcheck/wal_rate.json
+wal_rate_state_file: /var/lib/pg-healthcheck/wal_rate.json
 
 # Slow network — give queries more time
 check_timeout_seconds: 30
@@ -565,7 +565,7 @@ check_timeout_seconds: 30
 | G13-010 | **Data directory disk space** — checks free space on the `data_directory` filesystem via `syscall.Statfs`; WARN at 80% used, CRITICAL at 90% (the data dir may be on a different mount than `pg_wal`, which is checked by G14-013) |
 | G13-011 | **Postmaster uptime** — queries `pg_postmaster_start_time()`; WARN if restarted within the last hour (possible crash/OOM kill), INFO if within 24 hours |
 
-> **Note:** G13-010 requires pg_healthcheck to run directly on the PostgreSQL host (same as G14-013).
+> **Note:** G13-010 requires pg-healthcheck to run directly on the PostgreSQL host (same as G14-013).
 > Remote connections will receive an INFO skip with instructions to run locally.
 
 ### G14 checks at a glance
@@ -633,7 +633,7 @@ check_timeout_seconds: 30
 Use in scripts and CI:
 
 ```bash
-./pg_healthcheck --host prod-db && echo "healthy" || echo "issues found (exit $?)"
+./pg-healthcheck --host prod-db && echo "healthy" || echo "issues found (exit $?)"
 ```
 
 ---
@@ -641,9 +641,9 @@ Use in scripts and CI:
 ## Project Structure
 
 ```
-pg_healthcheck/
+pg-healthcheck/
 │
-├── cmd/pg_healthcheck/
+├── cmd/pg-healthcheck/
 │   └── main.go                  CLI entry point — flags, orchestration
 │
 ├── internal/
@@ -733,6 +733,6 @@ This automatically builds binaries for all platforms, packages each one with `LI
 
 ## License
 
-pg_healthcheck is released under the [PostgreSQL License](LICENSE) — the same permissive license used by PostgreSQL itself.
+pg-healthcheck is released under the [PostgreSQL License](LICENSE) — the same permissive license used by PostgreSQL itself.
 
 Copyright (c) 2025, Ahsan Hadi

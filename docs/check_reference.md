@@ -1,6 +1,6 @@
 # Check Groups Reference
 
-pg_healthcheck organizes its 180+ checks into 15 groups, labeled G01
+pg-healthcheck organizes its 180+ checks into 15 groups, labeled G01
 through G15. Each group focuses on a specific operational area and
 runs independently. The following sections describe each group, its
 purpose, and the individual checks it contains.
@@ -291,7 +291,7 @@ behavior that affects stability and throughput.
 | G13-010 | Data directory disk space | WARN / CRITICAL |
 | G13-011 | Postmaster uptime | WARN / INFO |
 
-G13-010 and G13-011 require pg_healthcheck to run on the PostgreSQL
+G13-010 and G13-011 require pg-healthcheck to run on the PostgreSQL
 host. Remote executions receive a graceful INFO skip.
 
 ## G14 - WAL Growth and Generation Rate

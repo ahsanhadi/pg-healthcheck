@@ -1,7 +1,7 @@
 # Troubleshooting
 
 This document covers common problems encountered when running
-pg_healthcheck, along with their causes and resolutions.
+pg-healthcheck, along with their causes and resolutions.
 
 ## Connection Issues
 
@@ -9,7 +9,7 @@ This section covers errors that occur before any checks run.
 
 ### "connection refused" or "no route to host"
 
-pg_healthcheck cannot reach the PostgreSQL host. Verify that the host
+pg-healthcheck cannot reach the PostgreSQL host. Verify that the host
 and port are correct with `--host` and `--port`. Confirm that
 PostgreSQL is running and that the firewall allows connections on the
 target port.
@@ -66,7 +66,7 @@ schema.
 ### G13-010 shows "Skipped - run locally"
 
 G13-010 uses `syscall.Statfs` to measure data directory disk space,
-which requires pg_healthcheck to run on the same host as the
+which requires pg-healthcheck to run on the same host as the
 PostgreSQL data directory. Run the tool directly on the database host
 rather than over the network.
 
@@ -91,7 +91,7 @@ SELECT pg_is_in_recovery();
 
 ## Output and Formatting
 
-This section covers problems with pg_healthcheck output.
+This section covers problems with pg-healthcheck output.
 
 ### ANSI color codes appear as raw characters in log files
 
@@ -99,7 +99,7 @@ Use `--no-color` to disable ANSI formatting when redirecting output
 to a file or log aggregation system:
 
 ```bash
-./pg_healthcheck --no-color 2>&1 | tee /var/log/pg_healthcheck.log
+./pg-healthcheck --no-color 2>&1 | tee /var/log/pg-healthcheck.log
 ```
 
 ### JSON output is missing some fields
@@ -112,6 +112,6 @@ expected behavior and does not indicate a parsing error.
 ## Still Having Issues?
 
 Report bugs and unexpected behavior at the
-[pg_healthcheck issue tracker](https://github.com/ahsanhadi/pg_healthcheck/issues).
-Include the pg_healthcheck version (`--version`), the PostgreSQL
+[pg-healthcheck issue tracker](https://github.com/ahsanhadi/pg-healthcheck/issues).
+Include the pg-healthcheck version (`--version`), the PostgreSQL
 version, and the full output with `--verbose`.

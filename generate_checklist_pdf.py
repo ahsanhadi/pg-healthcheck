@@ -1,5 +1,5 @@
 """
-Generate pg_healthcheck Check Reference PDF
+Generate pg-healthcheck Check Reference PDF
 One line per check across all 15 groups.
 """
 
@@ -14,7 +14,7 @@ from reportlab.platypus import (
 from reportlab.lib.enums import TA_LEFT, TA_CENTER
 from datetime import date
 
-OUTPUT = "/Users/ahsanhadi/pg healthcheck/pg_healthcheck_check_reference.pdf"
+OUTPUT = "/Users/ahsanhadi/pg healthcheck/pg-healthcheck_check_reference.pdf"
 
 # ── Palette ────────────────────────────────────────────────────────────────
 DARK_BLUE   = colors.HexColor("#1B3A5C")
@@ -273,8 +273,8 @@ def build_pdf():
         rightMargin=18*mm,
         topMargin=20*mm,
         bottomMargin=20*mm,
-        title="pg_healthcheck — Check Reference",
-        author="pg_healthcheck",
+        title="pg-healthcheck — Check Reference",
+        author="pg-healthcheck",
         subject="All checks, one line each",
     )
 
@@ -308,7 +308,7 @@ def build_pdf():
 
     # ── Cover block ────────────────────────────────────────────────────────
     story.append(Spacer(1, 4*mm))
-    story.append(Paragraph("pg_healthcheck", title_style))
+    story.append(Paragraph("pg-healthcheck", title_style))
     story.append(Paragraph(
         f"Check Reference &nbsp;·&nbsp; {len(CHECKS)} checks across {len(GROUPS)} groups &nbsp;·&nbsp; {date.today().strftime('%d %B %Y')}",
         subtitle_style))
@@ -395,7 +395,7 @@ def build_pdf():
         "skip gracefully when not installed. "
         "G13-010 and G14-013 require local execution on the PostgreSQL host. "
         "G13-008 and G13-009 are Linux-only. "
-        "github.com/ahsanhadi/pg_healthcheck",
+        "github.com/ahsanhadi/pg-healthcheck",
         footer_style))
 
     doc.build(story)

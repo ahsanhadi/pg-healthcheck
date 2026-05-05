@@ -7,8 +7,8 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/pgedge/pg_healthcheck/internal/config"
-	"github.com/pgedge/pg_healthcheck/internal/severity"
+	"github.com/pgedge/pg-healthcheck/internal/config"
+	"github.com/pgedge/pg-healthcheck/internal/severity"
 )
 
 // ── Finding ──────────────────────────────────────────────────────────────────

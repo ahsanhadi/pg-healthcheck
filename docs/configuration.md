@@ -1,6 +1,6 @@
 # Configuration Reference
 
-pg_healthcheck loads thresholds from a YAML configuration file. All
+pg-healthcheck loads thresholds from a YAML configuration file. All
 keys are optional - absent keys keep their built-in defaults. Pass
 the file path with `--config /path/to/healthcheck.yaml`. CLI flags
 override YAML values, which in turn override built-in defaults.
@@ -14,7 +14,7 @@ The configuration file uses YAML with the following conventions:
 - Numbers are plain integers or decimals without quotes.
 - Comments start with `#`.
 
-If the file contains a syntax error, pg_healthcheck prints a warning
+If the file contains a syntax error, pg-healthcheck prints a warning
 and falls back to built-in defaults:
 
 ```
@@ -143,7 +143,7 @@ wal_rate_baseline_samples:      12  # samples to keep for the rolling average
 wal_fpi_ratio_warn:            0.40 # WARN if FPI records exceed 40% of WAL
 wal_filesystem_warn_pct:        60  # WARN if pg_wal filesystem is >60% full
 wal_filesystem_critical_pct:    80  # CRITICAL at >80% - exhaustion crashes PG
-wal_rate_state_file: /var/lib/pg_healthcheck/wal_rate.json
+wal_rate_state_file: /var/lib/pg-healthcheck/wal_rate.json
 ```
 
 Set `wal_rate_state_file` to a persistent path outside `/tmp/`. Files
@@ -167,7 +167,7 @@ The following file shows only the keys that differ from defaults for
 a typical production server:
 
 ```yaml
-# /etc/pg_healthcheck/prod.yaml
+# /etc/pg-healthcheck/prod.yaml
 
 backup_max_age_hours:        13
 backrest_stanza:             prod-db
@@ -180,7 +180,7 @@ wal_dir_critical_gb:         70
 wal_filesystem_warn_pct:     50
 wal_filesystem_critical_pct: 70
 
-wal_rate_state_file: /var/lib/pg_healthcheck/wal_rate.json
+wal_rate_state_file: /var/lib/pg-healthcheck/wal_rate.json
 
 check_timeout_seconds: 30
 ```

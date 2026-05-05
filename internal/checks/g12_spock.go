@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/pgedge/pg_healthcheck/internal/config"
+	"github.com/pgedge/pg-healthcheck/internal/config"
 )
 
 const g12 = "pgEdge / Spock Cluster"

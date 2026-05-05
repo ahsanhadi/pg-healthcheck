@@ -1,13 +1,13 @@
 # Installation
 
-pg_healthcheck is a single statically linked binary. The following
+pg-healthcheck is a single statically linked binary. The following
 sections cover building from source and the prerequisites required
 before running any checks.
 
 ## Prerequisites
 
 The following software must be present before building or running
-pg_healthcheck:
+pg-healthcheck:
 
 - Go 1.23 or later. Install with `brew install go` on macOS or follow
   the [Go installation guide](https://go.dev/doc/install).
@@ -33,19 +33,19 @@ Clone the repository and build the binary using the following
 commands:
 
 ```bash
-git clone https://github.com/ahsanhadi/pg_healthcheck.git
-cd pg_healthcheck
-go build -o pg_healthcheck ./cmd/pg_healthcheck
+git clone https://github.com/ahsanhadi/pg-healthcheck.git
+cd pg-healthcheck
+go build -o pg-healthcheck ./cmd/pg-healthcheck
 ```
 
-The resulting `pg_healthcheck` binary is self-contained and has no
+The resulting `pg-healthcheck` binary is self-contained and has no
 runtime dependencies.
 
 To verify the build, run the following command against a local
 PostgreSQL instance:
 
 ```bash
-./pg_healthcheck --host localhost --dbname postgres --user postgres
+./pg-healthcheck --host localhost --dbname postgres --user postgres
 ```
 
 ## Cross-Platform Builds
@@ -56,16 +56,16 @@ To cross-compile manually, set the `GOOS` and `GOARCH` environment
 variables before building:
 
 ```bash
-GOOS=linux GOARCH=amd64 go build -o pg_healthcheck-linux-amd64 ./cmd/pg_healthcheck
+GOOS=linux GOARCH=amd64 go build -o pg-healthcheck-linux-amd64 ./cmd/pg-healthcheck
 ```
 
 ## Running in CI
 
-pg_healthcheck integrates naturally into CI pipelines using its exit
+pg-healthcheck integrates naturally into CI pipelines using its exit
 codes. A non-zero exit code signals health issues:
 
 ```bash
-./pg_healthcheck --host $DB_HOST --user postgres && echo "healthy"
+./pg-healthcheck --host $DB_HOST --user postgres && echo "healthy"
 ```
 
 Exit code `1` indicates at least one WARN finding. Exit code `2`

@@ -1,6 +1,6 @@
 # Architecture
 
-pg_healthcheck is structured as a pipeline of five discrete layers.
+pg-healthcheck is structured as a pipeline of five discrete layers.
 Each layer has a single responsibility, making it straightforward to
 add new check groups or output formats without touching the others.
 
@@ -11,7 +11,7 @@ tool:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  ./pg_healthcheck --host db1 --dbname mydb                       │
+│  ./pg-healthcheck --host db1 --dbname mydb                       │
 └───────────────────────┬─────────────────────────────────────────┘
                         │
                 ┌───────▼────────┐
@@ -43,7 +43,7 @@ tool:
 
 ## CLI Layer
 
-The CLI layer lives in `cmd/pg_healthcheck/main.go`. This file
+The CLI layer lives in `cmd/pg-healthcheck/main.go`. This file
 contains `main()` and uses the Cobra library to define all command-line
 flags. After parsing flags, `main()` calls `run()`, which orchestrates
 the remaining layers in sequence. The CLI layer is the entry point and
@@ -106,7 +106,7 @@ The following table describes the layout of the repository:
 
 | Path | Purpose |
 |---|---|
-| `cmd/pg_healthcheck/main.go` | CLI entry point - flags and orchestration |
+| `cmd/pg-healthcheck/main.go` | CLI entry point - flags and orchestration |
 | `internal/config/config.go` | Config struct, YAML loader, and defaults |
 | `internal/connector/pg.go` | PostgreSQL connection pool helper |
 | `internal/severity/severity.go` | OK, INFO, WARN, CRITICAL severity type |

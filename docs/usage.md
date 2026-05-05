@@ -1,13 +1,13 @@
 # CLI Usage and Modes
 
-pg_healthcheck supports two operating modes: single-node mode for
+pg-healthcheck supports two operating modes: single-node mode for
 diagnosing one PostgreSQL instance, and cluster mode for diagnosing
 a pgEdge multi-node Spock cluster. The following sections describe
 the available flags, modes, and common usage patterns.
 
 ## Command-Line Flags
 
-The following table describes every flag accepted by pg_healthcheck:
+The following table describes every flag accepted by pg-healthcheck:
 
 | Flag | Default | Description |
 |---|---|---|
@@ -33,19 +33,19 @@ enabled check groups sequentially. Use the following command as a
 starting point:
 
 ```bash
-./pg_healthcheck --host db1.example.com --dbname mydb --user postgres
+./pg-healthcheck --host db1.example.com --dbname mydb --user postgres
 ```
 
 To run only a subset of check groups:
 
 ```bash
-./pg_healthcheck --groups G01,G05,G09 --verbose
+./pg-healthcheck --groups G01,G05,G09 --verbose
 ```
 
 To load a custom threshold configuration:
 
 ```bash
-./pg_healthcheck --config /etc/pg_healthcheck/prod.yaml
+./pg-healthcheck --config /etc/pg-healthcheck/prod.yaml
 ```
 
 ## Cluster Mode
@@ -56,7 +56,7 @@ perform cross-node comparisons such as row-count parity and LSN lag
 between node pairs. Use the following command to run cluster mode:
 
 ```bash
-./pg_healthcheck \
+./pg-healthcheck \
   --mode cluster \
   --nodes node1:5432,node2:5432,node3:5432 \
   --dbname mydb \
@@ -74,7 +74,7 @@ output. Use this mode to feed results into monitoring pipelines,
 dashboards, or custom alerting systems:
 
 ```bash
-./pg_healthcheck --output json | jq '.summary'
+./pg-healthcheck --output json | jq '.summary'
 ```
 
 The document includes a `summary` object with counts by severity and
@@ -83,7 +83,7 @@ a `checks` array containing every finding. See the
 
 ## Exit Codes
 
-pg_healthcheck uses exit codes consistently so that it integrates with
+pg-healthcheck uses exit codes consistently so that it integrates with
 scripts and CI systems:
 
 - Exit code `0` means all checks returned OK or INFO.
@@ -94,7 +94,7 @@ The following shell snippet demonstrates using the exit code in a
 monitoring script:
 
 ```bash
-./pg_healthcheck --host prod-db
+./pg-healthcheck --host prod-db
 case $? in
   0) echo "all healthy" ;;
   1) echo "warnings detected" ;;
@@ -109,7 +109,7 @@ of group IDs to `--groups`. The following command runs only the
 replication and WAL-related groups:
 
 ```bash
-./pg_healthcheck --groups G09,G14,G15 --verbose
+./pg-healthcheck --groups G09,G14,G15 --verbose
 ```
 
 ## Disabling Color
@@ -118,7 +118,7 @@ Use `--no-color` for log aggregation systems or terminals that do not
 support ANSI escape codes:
 
 ```bash
-./pg_healthcheck --no-color 2>&1 | tee /var/log/pg_healthcheck.log
+./pg-healthcheck --no-color 2>&1 | tee /var/log/pg-healthcheck.log
 ```
 
 ## Next Steps

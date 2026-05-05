@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to pg_healthcheck will be documented in this file.
+All notable changes to pg-healthcheck will be documented in this file.
 
 The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project

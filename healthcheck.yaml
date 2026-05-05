@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────
-#  pg_healthcheck  ·  configuration file
+#  pg-healthcheck  ·  configuration file
 #  All values here are defaults. Override via --config or CLI flags.
 # ─────────────────────────────────────────────────────────────
 
@@ -72,7 +72,7 @@ wal_rate_baseline_samples:      12      # number of past samples to keep
 wal_fpi_ratio_warn:             0.40    # WARN if FPI records > 40% of all WAL records
 wal_filesystem_warn_pct:        60      # WARN if pg_wal filesystem > 60% full
 wal_filesystem_critical_pct:    80      # CRITICAL if pg_wal filesystem > 80% full
-wal_rate_state_file:            /tmp/pg_healthcheck_wal_rate.json
+wal_rate_state_file:            /tmp/pg-healthcheck_wal_rate.json
 
 # ── Per-check timeout ─────────────────────────────────────────
 check_timeout_seconds: 10

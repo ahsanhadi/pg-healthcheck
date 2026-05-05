@@ -1,4 +1,4 @@
-# pg_healthcheck Integration Tests
+# pg-healthcheck Integration Tests
 
 ## The problem this solves
 
@@ -17,7 +17,7 @@ psql -h 192.168.169.158 -p 5432 -U ahsan -d testdb -f testdata/inject_problems.s
 **Step 2 — run the healthcheck and capture results:**
 ```bash
 cd ..
-./pg_healthcheck --host 192.168.169.158 --port 5432 --dbname testdb --user ahsan \
+./pg-healthcheck --host 192.168.169.158 --port 5432 --dbname testdb --user ahsan \
     --output json --verbose > /tmp/hc_results.json
 ```
 
@@ -45,7 +45,7 @@ The integration tests require a real PostgreSQL instance. They are opt-in
 ```bash
 # Build the binary first
 cd ..
-go build -o pg_healthcheck ./cmd/pg_healthcheck/
+go build -o pg-healthcheck ./cmd/pg-healthcheck/
 
 # Run all integration tests
 go test -tags integration -v ./tests/ \

@@ -1,6 +1,6 @@
 //go:build integration
 
-// Package tests contains integration tests for pg_healthcheck.
+// Package tests contains integration tests for pg-healthcheck.
 //
 // These tests inject real problems into a PostgreSQL database, run the full
 // check suite, and assert that the expected check IDs fire at the expected
@@ -39,7 +39,7 @@ var (
 	pgDBName = flag.String("pg-dbname", "postgres", "Database name")
 	pgUser   = flag.String("pg-user", "postgres", "PostgreSQL user")
 	pgPass   = flag.String("pg-pass", os.Getenv("PGPASSWORD"), "PostgreSQL password")
-	binary   = flag.String("binary", "./pg_healthcheck", "Path to pg_healthcheck binary")
+	binary   = flag.String("binary", "./pg-healthcheck", "Path to pg-healthcheck binary")
 )
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -74,7 +74,7 @@ func runHealthcheck(t *testing.T, extraArgs ...string) map[string]checkResult {
 	args = append(args, extraArgs...)
 
 	// Go test changes CWD to the package directory (tests/) before running,
-	// so binary paths like "./pg_healthcheck" are relative to tests/ — not the
+	// so binary paths like "./pg-healthcheck" are relative to tests/ — not the
 	// repo root where the binary is actually built.  Resolve from ".." (repo root)
 	// before absolutising so we find the real binary.
 	binPath, err := filepath.Abs(filepath.Join("..", *binary))

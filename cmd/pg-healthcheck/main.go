@@ -1,11 +1,11 @@
-// pg_healthcheck — enterprise PostgreSQL health diagnostics
+// pg-healthcheck — enterprise PostgreSQL health diagnostics
 //
 // Usage examples:
 //
-//	pg_healthcheck --host db1 --dbname mydb --user postgres
-//	pg_healthcheck --mode cluster --nodes node1:5432,node2:5432,node3:5432
-//	pg_healthcheck --output json | jq '.summary'
-//	pg_healthcheck --groups G01,G05,G09 --verbose
+//	pg-healthcheck --host db1 --dbname mydb --user postgres
+//	pg-healthcheck --mode cluster --nodes node1:5432,node2:5432,node3:5432
+//	pg-healthcheck --output json | jq '.summary'
+//	pg-healthcheck --groups G01,G05,G09 --verbose
 //
 // Exit codes:
 //
@@ -23,10 +23,10 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/pgedge/pg_healthcheck/internal/checks"
-	"github.com/pgedge/pg_healthcheck/internal/config"
-	"github.com/pgedge/pg_healthcheck/internal/connector"
-	"github.com/pgedge/pg_healthcheck/internal/report"
+	"github.com/pgedge/pg-healthcheck/internal/checks"
+	"github.com/pgedge/pg-healthcheck/internal/config"
+	"github.com/pgedge/pg-healthcheck/internal/connector"
+	"github.com/pgedge/pg-healthcheck/internal/report"
 	"github.com/spf13/cobra"
 )
 
@@ -82,10 +82,10 @@ var spockChecker = &checks.G12SpockCluster{}
 
 func main() {
 	root := &cobra.Command{
-		Use:     "pg_healthcheck",
+		Use:     "pg-healthcheck",
 		Short:   "Enterprise PostgreSQL health diagnostics",
 		Version: version + " (commit=" + commit + " built=" + date + ")",
-		Long: `pg_healthcheck runs 90+ checks across 13 groups against a single PostgreSQL
+		Long: `pg-healthcheck runs 90+ checks across 13 groups against a single PostgreSQL
 instance or a pgEdge multi-node distributed cluster.
 
 Every check queries real system catalog views — no estimated or simulated data.

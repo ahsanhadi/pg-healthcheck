@@ -1,6 +1,6 @@
-# pg_healthcheck
+# pg-healthcheck
 
-pg_healthcheck is an enterprise-grade PostgreSQL health diagnostics
+pg-healthcheck is an enterprise-grade PostgreSQL health diagnostics
 tool for single instances and pgEdge multi-node Spock clusters. The
 tool runs 180+ checks across 15 groups by querying live PostgreSQL
 system catalog views - no estimates and no simulated data. Output is
@@ -8,7 +8,7 @@ coloured terminal text or structured JSON for GUI and API consumption.
 
 ## Overview
 
-pg_healthcheck includes the following capabilities:
+pg-healthcheck includes the following capabilities:
 
 - comprehensive diagnostics across connections, backups, performance,
   locks, vacuum, indexes, WAL, replication, security, and OS resources.
@@ -29,25 +29,25 @@ The following commands show how to connect to a local PostgreSQL
 instance and run all checks:
 
 ```bash
-./pg_healthcheck --host localhost --dbname mydb --user postgres
+./pg-healthcheck --host localhost --dbname mydb --user postgres
 ```
 
 To run a subset of check groups, use the `--groups` flag:
 
 ```bash
-./pg_healthcheck --groups G01,G05,G09 --verbose
+./pg-healthcheck --groups G01,G05,G09 --verbose
 ```
 
 To output results as JSON:
 
 ```bash
-./pg_healthcheck --output json | jq '.summary'
+./pg-healthcheck --output json | jq '.summary'
 ```
 
 ## Next Steps
 
 - The [Architecture](architecture.md) document describes the internal
-  layers of pg_healthcheck and how checks are organized.
+  layers of pg-healthcheck and how checks are organized.
 - The [Installation](getting_started.md) document explains how to
   build and install the tool from source.
 - The [Configuration Reference](configuration.md) document covers

@@ -7,7 +7,7 @@ import (
 	"os"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/pgedge/pg_healthcheck/internal/config"
+	"github.com/pgedge/pg-healthcheck/internal/config"
 )
 
 // Connect opens a connection pool for the instance described by cfg.

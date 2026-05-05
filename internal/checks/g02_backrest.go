@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/pgedge/pg_healthcheck/internal/config"
+	"github.com/pgedge/pg-healthcheck/internal/config"
 	"gopkg.in/ini.v1"
 )
 

@@ -46,15 +46,15 @@ jobs:
           args: --timeout=5m
 
       - name: Build
-        run: go build -v -ldflags="-s -w" ./cmd/pg_healthcheck/
+        run: go build -v -ldflags="-s -w" ./cmd/pg-healthcheck/
 
       - name: Build (all platforms)
         run: |
-          GOOS=linux   GOARCH=amd64  go build -o /dev/null ./cmd/pg_healthcheck/
-          GOOS=linux   GOARCH=arm64  go build -o /dev/null ./cmd/pg_healthcheck/
-          GOOS=darwin  GOARCH=amd64  go build -o /dev/null ./cmd/pg_healthcheck/
-          GOOS=darwin  GOARCH=arm64  go build -o /dev/null ./cmd/pg_healthcheck/
-          GOOS=windows GOARCH=amd64  go build -o /dev/null ./cmd/pg_healthcheck/
+          GOOS=linux   GOARCH=amd64  go build -o /dev/null ./cmd/pg-healthcheck/
+          GOOS=linux   GOARCH=arm64  go build -o /dev/null ./cmd/pg-healthcheck/
+          GOOS=darwin  GOARCH=amd64  go build -o /dev/null ./cmd/pg-healthcheck/
+          GOOS=darwin  GOARCH=arm64  go build -o /dev/null ./cmd/pg-healthcheck/
+          GOOS=windows GOARCH=amd64  go build -o /dev/null ./cmd/pg-healthcheck/
 
       - name: Test (unit)
         run: go test -race -count=1 ./...
@@ -92,7 +92,7 @@ jobs:
         run: go mod download
 
       - name: Build binary
-        run: go build -o pg_healthcheck ./cmd/pg_healthcheck/
+        run: go build -o pg-healthcheck ./cmd/pg-healthcheck/
 
       - name: Enable max_prepared_transactions
         run: |
@@ -110,4 +110,4 @@ jobs:
             -pg-dbname testdb \
             -pg-user postgres \
             -pg-pass postgres \
-            -binary ./pg_healthcheck
+            -binary ./pg-healthcheck

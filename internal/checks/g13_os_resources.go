@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/pgedge/pg_healthcheck/internal/config"
+	"github.com/pgedge/pg-healthcheck/internal/config"
 )
 
 const g13 = "OS & Resource-Level Checks"
@@ -260,13 +260,13 @@ func g13DataDirFreeSpace(ctx context.Context, db *pgxpool.Pool) []Finding {
 		if os.IsPermission(err) {
 			return []Finding{NewInfo("G13-010", g13, "Data directory disk space",
 				fmt.Sprintf("Permission denied reading filesystem stats for %s", dataDir),
-				"Run pg_healthcheck as the postgres OS user or grant read access to the data directory.",
+				"Run pg-healthcheck as the postgres OS user or grant read access to the data directory.",
 				err.Error(),
 				"https://www.postgresql.org/docs/current/storage-file-layout.html")}
 		}
 		return []Finding{NewInfo("G13-010", g13, "Data directory disk space",
 			fmt.Sprintf("Filesystem stat requires local execution (data_directory: %s)", dataDir),
-			"Run pg_healthcheck directly on the PostgreSQL host — not via a remote connection.",
+			"Run pg-healthcheck directly on the PostgreSQL host — not via a remote connection.",
 			err.Error(),
 			"https://www.postgresql.org/docs/current/storage-file-layout.html")}
 	}

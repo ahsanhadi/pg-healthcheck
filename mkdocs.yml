@@ -1,4 +1,4 @@
-site_name: pgEdge pg_healthcheck
+site_name: pgEdge pg-healthcheck
 
 extra_css:
   - stylesheets/extra.css
@@ -47,7 +47,7 @@ extra:
   generator: false
 
 copyright: Copyright &copy; 2025 - 2026 pgEdge, Inc
-repo_url: https://github.com/ahsanhadi/pg_healthcheck
+repo_url: https://github.com/ahsanhadi/pg-healthcheck
 
 nav:
   - Getting Started:
@@ -56,7 +56,7 @@ nav:
       - Installation: getting_started.md
   - Configuration:
       - Configuration Reference: configuration.md
-  - Using pg_healthcheck:
+  - Using pg-healthcheck:
       - CLI Usage and Modes: usage.md
       - Check Groups Reference: check_reference.md
       - JSON Output: json_output.md

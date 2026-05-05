@@ -1,6 +1,6 @@
 # JSON Output
 
-pg_healthcheck produces a structured JSON document when run with
+pg-healthcheck produces a structured JSON document when run with
 `--output json`. The document includes a summary of findings by
 severity and a full list of all check results. The following sections
 describe the schema and how to use it.
@@ -90,19 +90,19 @@ The `severity` field uses one of four values:
 To extract only failing checks, use `jq` to filter by severity:
 
 ```bash
-./pg_healthcheck --output json \
+./pg-healthcheck --output json \
   | jq '.checks[] | select(.severity == "WARN" or .severity == "CRITICAL")'
 ```
 
 To get a simple pass or fail status from the summary:
 
 ```bash
-./pg_healthcheck --output json | jq '.summary.critical == 0 and .summary.warn == 0'
+./pg-healthcheck --output json | jq '.summary.critical == 0 and .summary.warn == 0'
 ```
 
 To pipe results into a monitoring system that accepts newline-delimited
 JSON, use `jq` to output one finding per line:
 
 ```bash
-./pg_healthcheck --output json | jq -c '.checks[]'
+./pg-healthcheck --output json | jq -c '.checks[]'
 ```

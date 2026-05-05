@@ -24,7 +24,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/pgedge/pg_healthcheck/internal/config"
+	"github.com/pgedge/pg-healthcheck/internal/config"
 )
 
 const g14 = "WAL Growth & Generation Rate"
@@ -186,7 +186,7 @@ func g14WALRate(lsn1 uint64, t1 time.Time, lsn2 uint64, t2 time.Time, cfg *confi
 	if rollingAvg <= 0 {
 		findings = append(findings, NewInfo("G14-003", g14, "WAL rate vs rolling baseline",
 			"Collecting baseline — will compare once 2+ samples are stored",
-			"Run pg_healthcheck regularly to build a rolling baseline.",
+			"Run pg-healthcheck regularly to build a rolling baseline.",
 			"", ""))
 	} else {
 		mult := cfg.WALRateBaselineMultiplier
@@ -214,7 +214,7 @@ func g14WALRate(lsn1 uint64, t1 time.Time, lsn2 uint64, t2 time.Time, cfg *confi
 func g14UpdateStateFile(cfg *config.Config, rateBS float64) float64 {
 	stateFile := cfg.WALRateStateFile
 	if stateFile == "" {
-		stateFile = "/tmp/pg_healthcheck_wal_rate.json"
+		stateFile = "/tmp/pg-healthcheck_wal_rate.json"
 	}
 
 	var state walRateState
@@ -567,13 +567,13 @@ func g14WALFilesystemPct(ctx context.Context, db *pgxpool.Pool, cfg *config.Conf
 		if os.IsPermission(err) {
 			return []Finding{NewInfo("G14-013", g14, "pg_wal filesystem usage",
 				fmt.Sprintf("pg_wal filesystem check: permission denied (path: %s)", walPath),
-				"Grant the OS user running pg_healthcheck read access to the data directory, or run as the postgres user.",
+				"Grant the OS user running pg-healthcheck read access to the data directory, or run as the postgres user.",
 				err.Error(),
 				"https://www.postgresql.org/docs/current/wal-configuration.html")}
 		}
 		return []Finding{NewInfo("G14-013", g14, "pg_wal filesystem usage",
 			fmt.Sprintf("pg_wal filesystem check requires local execution (path: %s)", walPath),
-			"Run pg_healthcheck directly on the PostgreSQL host — not via a remote connection.",
+			"Run pg-healthcheck directly on the PostgreSQL host — not via a remote connection.",
 			err.Error(),
 			"https://www.postgresql.org/docs/current/wal-configuration.html")}
 	}

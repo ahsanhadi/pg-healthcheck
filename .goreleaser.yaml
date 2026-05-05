@@ -1,6 +1,6 @@
 version: 2
 
-project_name: pg_healthcheck
+project_name: pg-healthcheck
 
 before:
   hooks:
@@ -8,9 +8,9 @@ before:
     - go mod verify
 
 builds:
-  - id: pg_healthcheck
-    main: ./cmd/pg_healthcheck/
-    binary: pg_healthcheck
+  - id: pg-healthcheck
+    main: ./cmd/pg-healthcheck/
+    binary: pg-healthcheck
     goos:
       - linux
       - darwin
@@ -72,10 +72,10 @@ changelog:
 release:
   github:
     owner: ahsanhadi
-    name: pg_healthcheck
-  name_template: "pg_healthcheck {{.Version}}"
+    name: pg-healthcheck
+  name_template: "pg-healthcheck {{.Version}}"
   header: |
-    ## pg_healthcheck {{.Version}}
+    ## pg-healthcheck {{.Version}}
 
     PostgreSQL health diagnostics for single instances and pgEdge Spock clusters.
 
@@ -83,20 +83,20 @@ release:
 
     **macOS (Apple Silicon)**
     ```bash
-    curl -L https://github.com/ahsanhadi/pg_healthcheck/releases/download/{{.Tag}}/pg_healthcheck_{{.Version}}_macOS_arm64.tar.gz | tar xz
-    ./pg_healthcheck --host localhost --dbname mydb --user postgres
+    curl -L https://github.com/ahsanhadi/pg-healthcheck/releases/download/{{.Tag}}/pg-healthcheck_{{.Version}}_macOS_arm64.tar.gz | tar xz
+    ./pg-healthcheck --host localhost --dbname mydb --user postgres
     ```
 
     **macOS (Intel)**
     ```bash
-    curl -L https://github.com/ahsanhadi/pg_healthcheck/releases/download/{{.Tag}}/pg_healthcheck_{{.Version}}_macOS_amd64.tar.gz | tar xz
+    curl -L https://github.com/ahsanhadi/pg-healthcheck/releases/download/{{.Tag}}/pg-healthcheck_{{.Version}}_macOS_amd64.tar.gz | tar xz
     ```
 
     **Linux (amd64)**
     ```bash
-    curl -L https://github.com/ahsanhadi/pg_healthcheck/releases/download/{{.Tag}}/pg_healthcheck_{{.Version}}_linux_amd64.tar.gz | tar xz
+    curl -L https://github.com/ahsanhadi/pg-healthcheck/releases/download/{{.Tag}}/pg-healthcheck_{{.Version}}_linux_amd64.tar.gz | tar xz
     ```
   footer: |
-    **Full Changelog**: https://github.com/ahsanhadi/pg_healthcheck/compare/{{.PreviousTag}}...{{.Tag}}
+    **Full Changelog**: https://github.com/ahsanhadi/pg-healthcheck/compare/{{.PreviousTag}}...{{.Tag}}
 
-    Released under the [PostgreSQL License](https://github.com/ahsanhadi/pg_healthcheck/blob/main/LICENSE).
+    Released under the [PostgreSQL License](https://github.com/ahsanhadi/pg-healthcheck/blob/main/LICENSE).

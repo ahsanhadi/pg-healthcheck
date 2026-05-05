@@ -1,4 +1,4 @@
-module github.com/pgedge/pg_healthcheck
+module github.com/pgedge/pg-healthcheck
 
 go 1.25.0
 

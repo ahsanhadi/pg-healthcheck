@@ -137,7 +137,7 @@ func Defaults() *Config {
 		WALFPIRatioWarn:            0.40,
 		WALFilesystemWarnPct:       60,
 		WALFilesystemCritPct:       80,
-		WALRateStateFile:           "/tmp/pg_healthcheck_wal_rate.json",
+		WALRateStateFile:           "/tmp/pg-healthcheck_wal_rate.json",
 		CrossNodeCountThresholdPct: 1.0,
 		Mode:                       "single",
 		Output:                     "text",

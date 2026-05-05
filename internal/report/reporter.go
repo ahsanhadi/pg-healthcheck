@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/fatih/color"
-	"github.com/pgedge/pg_healthcheck/internal/checks"
-	"github.com/pgedge/pg_healthcheck/internal/severity"
+	"github.com/pgedge/pg-healthcheck/internal/checks"
+	"github.com/pgedge/pg-healthcheck/internal/severity"
 )
 
 // ── JSON types ───────────────────────────────────────────────────────────────
@@ -94,7 +94,7 @@ func PrintText(findings []checks.Finding, pgVersion, hostname, mode string, verb
 
 	// ── header ──────────────────────────────────────────────
 	fmt.Println()
-	cHead.Printf("  pg_healthcheck")
+	cHead.Printf("  pg-healthcheck")
 	fmt.Printf("  │  %s  │  PG %s  │  %s  │  %s\n",
 		hostname, pgVersion, mode,
 		time.Now().Format("2006-01-02 15:04:05 UTC"))
