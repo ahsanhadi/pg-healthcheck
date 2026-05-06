@@ -58,7 +58,7 @@ func g01TCPReach(cfg *config.Config) []Finding {
 			"Verify PostgreSQL is running and the port is reachable.", "",
 			"https://www.postgresql.org/docs/current/server-start.html")}
 	}
-	conn.Close()
+	_ = conn.Close()
 	return []Finding{NewOK("G01-001", g01, "TCP port reachability",
 		fmt.Sprintf("Connected to %s in %dms", addr, ms),
 		"https://www.postgresql.org/docs/current/server-start.html")}
@@ -116,7 +116,7 @@ func g01TLSExpiry(ctx context.Context, db *pgxpool.Pool, cfg *config.Config) []F
 			"Enable ssl=on and provide a valid certificate.", "",
 			"https://www.postgresql.org/docs/current/ssl-tcp.html")}
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	certs := conn.ConnectionState().PeerCertificates
 	if len(certs) == 0 {
 		return []Finding{NewInfo("G01-004", g01, "TLS certificate expiry",
@@ -148,7 +148,7 @@ func g01VersionEOL(ctx context.Context, db *pgxpool.Pool) []Finding {
 		return []Finding{NewSkip("G01-005", g01, "PostgreSQL version EOL", err.Error())}
 	}
 	var major int
-	fmt.Sscanf(ver, "%d.", &major)
+	_, _ = fmt.Sscanf(ver, "%d.", &major)
 	obs := fmt.Sprintf("PostgreSQL %s (major %d)", ver, major)
 	eol, known := pgEOL[major]
 	if !known {

@@ -83,7 +83,7 @@ func g14SampleLSN(ctx context.Context, db *pgxpool.Pool) (uint64, time.Time) {
 		return 0, time.Now()
 	}
 	var hi, lo uint64
-	fmt.Sscanf(lsnStr, "%X/%X", &hi, &lo)
+	_, _ = fmt.Sscanf(lsnStr, "%X/%X", &hi, &lo)
 	return hi<<32 | lo, ts
 }
 

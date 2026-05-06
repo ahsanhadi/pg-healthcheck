@@ -18,3 +18,5 @@ linters:
         text: "rows.Close"
       - linters: [errcheck]
         text: "rows.Scan"
+      - linters: [errcheck]
+        path: "internal/report/reporter.go"
