@@ -70,9 +70,6 @@ changelog:
       order: 99
 
 release:
-  github:
-    owner: ahsanhadi
-    name: pg-healthcheck
   name_template: "pg-healthcheck {{.Version}}"
   header: |
     ## pg-healthcheck {{.Version}}
@@ -83,20 +80,20 @@ release:
 
     **macOS (Apple Silicon)**
     ```bash
-    curl -L https://github.com/ahsanhadi/pg-healthcheck/releases/download/{{.Tag}}/pg-healthcheck_{{.Version}}_macOS_arm64.tar.gz | tar xz
+    curl -L https://github.com/pgEdge/pg-healthcheck/releases/download/{{.Tag}}/pg-healthcheck_{{.Version}}_macOS_arm64.tar.gz | tar xz
     ./pg-healthcheck --host localhost --dbname mydb --user postgres
     ```
 
     **macOS (Intel)**
     ```bash
-    curl -L https://github.com/ahsanhadi/pg-healthcheck/releases/download/{{.Tag}}/pg-healthcheck_{{.Version}}_macOS_amd64.tar.gz | tar xz
+    curl -L https://github.com/pgEdge/pg-healthcheck/releases/download/{{.Tag}}/pg-healthcheck_{{.Version}}_macOS_amd64.tar.gz | tar xz
     ```
 
     **Linux (amd64)**
     ```bash
-    curl -L https://github.com/ahsanhadi/pg-healthcheck/releases/download/{{.Tag}}/pg-healthcheck_{{.Version}}_linux_amd64.tar.gz | tar xz
+    curl -L https://github.com/pgEdge/pg-healthcheck/releases/download/{{.Tag}}/pg-healthcheck_{{.Version}}_linux_amd64.tar.gz | tar xz
     ```
   footer: |
-    **Full Changelog**: https://github.com/ahsanhadi/pg-healthcheck/compare/{{.PreviousTag}}...{{.Tag}}
+    **Full Changelog**: https://github.com/pgEdge/pg-healthcheck/compare/{{.PreviousTag}}...{{.Tag}}
 
-    Released under the [PostgreSQL License](https://github.com/ahsanhadi/pg-healthcheck/blob/main/LICENSE).
+    Released under the [PostgreSQL License](https://github.com/pgEdge/pg-healthcheck/blob/main/LICENSE).
