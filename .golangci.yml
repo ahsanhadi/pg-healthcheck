@@ -10,19 +10,12 @@ linters:
     - ineffassign
   disable:
     - depguard
-
-linters-settings:
-  errcheck:
-    # We intentionally ignore some scan errors in check functions
-    # (rows.Scan, rows.Close) — suppress those false positives.
-    ignore-return-error: false
-    check-blank: false
-
-issues:
-  exclude-rules:
-    # Ignore errcheck on rows.Close() — it's a cleanup call, not actionable
-    - linters: [errcheck]
-      text: "rows.Close"
-    # Ignore errcheck on rows.Scan() — we handle nil checks explicitly
-    - linters: [errcheck]
-      text: "rows.Scan"
+  settings:
+    errcheck:
+      check-blank: false
+  exclusions:
+    rules:
+      - linters: [errcheck]
+        text: "rows.Close"
+      - linters: [errcheck]
+        text: "rows.Scan"
