@@ -375,7 +375,7 @@ func validateGroups(groups []string, cmd *cobra.Command) error {
 		}
 		ids = append(ids, "G12")
 		return fmt.Errorf(
-			"unknown group ID(s): %s\nValid groups: %s\nRun '%s --help' to see all flags.",
+			"unknown group ID(s): %s\nValid groups: %s\nRun '%s --help' to see all flags",
 			strings.Join(unknown, ", "),
 			strings.Join(ids, ", "),
 			cmd.CommandPath(),
