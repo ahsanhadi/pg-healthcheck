@@ -8,7 +8,6 @@ linters:
     - unused
     - gosimple
     - ineffassign
-    - typecheck
   disable:
     - depguard
 
