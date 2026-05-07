@@ -4,6 +4,32 @@ pg-healthcheck is a single statically linked binary. The following
 sections cover building from source and the prerequisites required
 before running any checks.
 
+## Exit Codes
+
+pg-healthcheck uses structured exit codes so it integrates directly
+with CI/CD pipelines, alerting systems, and monitoring scripts:
+
+| Exit code | Meaning |
+|-----------|---------|
+| `0` | All checks returned **OK** or **INFO** — cluster is healthy |
+| `1` | At least one check returned **WARN** — investigate before next incident window |
+| `2` | At least one check returned **CRITICAL** — requires immediate attention |
+
+```bash
+# Use in CI — fail the pipeline on any CRITICAL finding
+./pg-healthcheck --host $DB_HOST --user postgres --dbname $DB_NAME
+# $? is 0, 1, or 2
+
+# Use in shell scripts
+if ! ./pg-healthcheck --host $DB_HOST --user postgres; then
+  echo "Health check failed (exit $?)" | send_alert
+fi
+```
+
+JSON output (`--output json`) preserves the same exit code semantics,
+making it easy to pipe results into Prometheus, Datadog, or any
+monitoring system that accepts structured data.
+
 ## Prerequisites
 
 The following software must be present before building or running

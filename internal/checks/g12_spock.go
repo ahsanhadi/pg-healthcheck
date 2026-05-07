@@ -61,6 +61,8 @@ func (g *G12SpockCluster) RunCluster(ctx context.Context, nodes []*NodeConn, cfg
 		nf = append(nf, g12QueueDepth(ctx, node.DB)...)
 		nf = append(nf, g12ChannelStats(ctx, node.DB)...)
 		nf = append(nf, g12ReplicationProgress(ctx, node.DB)...)
+		nf = append(nf, g12SlotSpillFiles(ctx, node.DB, cfg)...)
+		nf = append(nf, g12ExceptionLogRetryFreq(ctx, node.DB, cfg)...)
 		all = append(all, tagNode(nf, node.Name)...)
 	}
 
@@ -1072,5 +1074,136 @@ func g12RowCountSampling(ctx context.Context, nodes []*NodeConn, cfg *config.Con
 	}
 	return []Finding{NewOK("G12-018", g12, "Row count sampling",
 		fmt.Sprintf("Row counts consistent across all nodes (threshold: %.1f%%)", threshold),
+		"https://github.com/pgEdge/spock")}
+}
+
+// G12-024 logical slot spill-file accumulation
+// pg_replslot/<slot>/spill/ grows unbounded when the apply worker falls behind under
+// write load. logical_decoding_work_mem controls the spill threshold (see G09-015).
+// Uses pg_ls_dir (relative to PGDATA) — works remotely; requires pg_monitor or superuser.
+func g12SlotSpillFiles(ctx context.Context, db *pgxpool.Pool, cfg *config.Config) []Finding {
+	const id = "G12-024"
+	const name = "Logical slot spill files"
+
+	// Requires PG 12+ for pg_ls_dir missing_ok parameter.
+	var major int
+	if err := db.QueryRow(ctx,
+		"SELECT current_setting('server_version_num')::int / 10000",
+	).Scan(&major); err != nil {
+		return []Finding{NewSkip(id, g12, name, err.Error())}
+	}
+	if major < 12 {
+		return []Finding{NewSkip(id, g12, name, "Requires PostgreSQL 12+")}
+	}
+
+	const q = `
+		SELECT slot_name,
+		    COALESCE((
+		        SELECT sum((pg_stat_file(
+		            'pg_replslot/' || slot_name || '/spill/' || fname, true
+		        )).size)
+		        FROM pg_ls_dir('pg_replslot/' || slot_name || '/spill', true, false) AS fname
+		    ), 0) AS spill_bytes
+		FROM pg_replication_slots
+		WHERE slot_type = 'logical'
+		ORDER BY spill_bytes DESC`
+
+	rows, err := db.Query(ctx, q)
+	if err != nil {
+		if strings.Contains(err.Error(), "permission denied") {
+			return []Finding{NewSkip(id, g12, name,
+				"Insufficient privileges — requires pg_monitor or superuser")}
+		}
+		return []Finding{NewSkip(id, g12, name, err.Error())}
+	}
+	defer rows.Close()
+
+	var critLines, warnLines []string
+	for rows.Next() {
+		var slotName string
+		var spillBytes int64
+		if err := rows.Scan(&slotName, &spillBytes); err != nil {
+			continue
+		}
+		spillMB := spillBytes / (1024 * 1024)
+		line := fmt.Sprintf("%-32s  %d MB", slotName, spillMB)
+		if spillMB >= int64(cfg.SpillCritMB) {
+			critLines = append(critLines, line)
+		} else if spillMB >= int64(cfg.SpillWarnMB) {
+			warnLines = append(warnLines, line)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return []Finding{NewSkip(id, g12, name, "scan error: "+err.Error())}
+	}
+
+	if len(critLines) > 0 {
+		return []Finding{NewCrit(id, g12, name,
+			fmt.Sprintf("%d slot(s) with critical spill accumulation (>= %d MB)", len(critLines), cfg.SpillCritMB),
+			"The apply worker is far behind — spill files will persist until the slot is consumed. Investigate consumer lag.",
+			strings.Join(critLines, "\n"),
+			"https://www.postgresql.org/docs/current/logicaldecoding-internals.html")}
+	}
+	if len(warnLines) > 0 {
+		return []Finding{NewWarn(id, g12, name,
+			fmt.Sprintf("%d slot(s) with elevated spill accumulation (>= %d MB)", len(warnLines), cfg.SpillWarnMB),
+			"Monitor apply worker progress; consider increasing logical_decoding_work_mem (see G09-015).",
+			strings.Join(warnLines, "\n"),
+			"https://www.postgresql.org/docs/current/logicaldecoding-internals.html")}
+	}
+	return []Finding{NewOK(id, g12, name,
+		"No excessive spill files in pg_replslot",
+		"https://www.postgresql.org/docs/current/logicaldecoding-internals.html")}
+}
+
+// G12-025 exception_log retry frequency — crash loop detection
+// G12-005 catches high row counts; this check catches the opposite pattern: a handful
+// of very old unresolved entries being continuously retried (apply worker crash loop).
+// Signal: unresolved entries exist AND oldest is beyond the configured age threshold.
+func g12ExceptionLogRetryFreq(ctx context.Context, db *pgxpool.Pool, cfg *config.Config) []Finding {
+	const id = "G12-025"
+	const name = "Spock exception log retry frequency"
+
+	if !spockExists(ctx, db, "exception_log") {
+		return []Finding{NewSkip(id, g12, name, "spock.exception_log not found")}
+	}
+
+	const q = `
+		SELECT count(*) AS total,
+		    COALESCE(EXTRACT(EPOCH FROM (now() - min(remote_commit_ts))) / 60, 0)::int AS oldest_age_mins
+		FROM spock.exception_log el
+		WHERE NOT EXISTS (
+		    SELECT 1 FROM spock.exception_status es
+		    WHERE es.remote_origin    = el.remote_origin
+		      AND es.remote_commit_ts = el.remote_commit_ts
+		      AND es.remote_xid       = el.remote_xid
+		)`
+
+	var total, oldestMins int
+	if err := db.QueryRow(ctx, q).Scan(&total, &oldestMins); err != nil {
+		return []Finding{NewSkip(id, g12, name, err.Error())}
+	}
+
+	if total == 0 {
+		return []Finding{NewOK(id, g12, name,
+			"No unresolved entries in spock.exception_log",
+			"https://github.com/pgEdge/spock")}
+	}
+
+	obs := fmt.Sprintf("%d unresolved exception(s) — oldest is %d minute(s) old", total, oldestMins)
+	if oldestMins >= cfg.SpockExceptionRetryMins {
+		hours := oldestMins / 60
+		detail := fmt.Sprintf(
+			"Apply worker may be in a crash loop — %d row(s) have been retried for %dh %dm.\n"+
+				"Run: SELECT * FROM spock.exception_log ORDER BY remote_commit_ts LIMIT 20;",
+			total, hours, oldestMins%60)
+		return []Finding{NewWarn(id, g12, name, obs,
+			fmt.Sprintf("Unresolved exceptions older than %d minutes indicate a retry crash loop.", cfg.SpockExceptionRetryMins),
+			detail,
+			"https://github.com/pgEdge/spock")}
+	}
+	return []Finding{NewInfo(id, g12, name, obs,
+		"Monitor for growth; resolve or clean up entries once investigated.",
+		"",
 		"https://github.com/pgEdge/spock")}
 }

@@ -57,6 +57,9 @@ type Config struct {
 	SpockExceptionCritRows   int `yaml:"spock_exception_log_crit_rows"`
 	SpockResolutionsWarnRows int `yaml:"spock_resolutions_warn_rows"`
 	SpockOldExceptionDays    int `yaml:"spock_old_exception_days"`
+	SpockExceptionRetryMins  int `yaml:"spock_exception_retry_warn_mins"`
+	SpillWarnMB              int `yaml:"spill_warn_mb"`
+	SpillCritMB              int `yaml:"spill_critical_mb"`
 
 	// ── Queries (G04) ──────────────────────────────────────
 	SlowQueryMeanWarnMs int `yaml:"slow_query_mean_warn_ms"`
@@ -128,6 +131,9 @@ func Defaults() *Config {
 		SpockExceptionCritRows:     100000,
 		SpockResolutionsWarnRows:   50000,
 		SpockOldExceptionDays:      7,
+		SpockExceptionRetryMins:    60,
+		SpillWarnMB:                500,
+		SpillCritMB:                2000,
 		WALRateWarnMBs:             50,
 		WALRateCritMBs:             200,
 		WALDirWarnGB:               20,

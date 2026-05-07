@@ -34,6 +34,7 @@ func (g *G09WALSlots) Run(ctx context.Context, db *pgxpool.Pool, cfg *config.Con
 	f = append(f, g09LogicalWorkerStatus(ctx, db)...)
 	f = append(f, g09SubscriptionRelState(ctx, db)...)
 	f = append(f, g09StreamingLagTime(ctx, db)...)
+	f = append(f, g09LogicalDecodingWorkMem(ctx, db)...)
 	return f, nil
 }
 
@@ -736,4 +737,55 @@ func g09StreamingLagTime(ctx context.Context, db *pgxpool.Pool) []Finding {
 	return []Finding{NewOK("G09-014", g09, "Streaming replication lag (time)",
 		fmt.Sprintf("%d standby(ies) — lag within acceptable range", len(all)),
 		"https://www.postgresql.org/docs/current/monitoring-stats.html#MONITORING-PG-STAT-REPLICATION-VIEW")}
+}
+
+// G09-015 logical_decoding_work_mem — spill-to-disk threshold for logical slots
+// Introduced in PG 13. Default 64 MB is a spill-file time bomb on busy primaries
+// with multiple logical slots.
+func g09LogicalDecodingWorkMem(ctx context.Context, db *pgxpool.Pool) []Finding {
+	const id = "G09-015"
+	const name = "logical_decoding_work_mem"
+
+	var major int
+	if err := db.QueryRow(ctx,
+		"SELECT current_setting('server_version_num')::int / 10000",
+	).Scan(&major); err != nil {
+		return []Finding{NewSkip(id, g09, name, err.Error())}
+	}
+	if major < 13 {
+		return []Finding{NewSkip(id, g09, name, "Requires PostgreSQL 13+")}
+	}
+
+	var workMemKB int
+	if err := db.QueryRow(ctx,
+		"SELECT setting::int FROM pg_settings WHERE name = 'logical_decoding_work_mem'",
+	).Scan(&workMemKB); err != nil {
+		return []Finding{NewSkip(id, g09, name, err.Error())}
+	}
+
+	var logicalSlots int
+	if err := db.QueryRow(ctx,
+		"SELECT count(*) FROM pg_replication_slots WHERE slot_type = 'logical'",
+	).Scan(&logicalSlots); err != nil {
+		return []Finding{NewSkip(id, g09, name, err.Error())}
+	}
+
+	workMemMB := workMemKB / 1024
+	obs := fmt.Sprintf("logical_decoding_work_mem = %dMB  |  logical slots = %d", workMemMB, logicalSlots)
+	const defaultKB = 65536 // 64 MB
+
+	if workMemKB <= defaultKB && logicalSlots >= 2 {
+		return []Finding{NewWarn(id, g09, name, obs,
+			fmt.Sprintf("Increase logical_decoding_work_mem above 64MB — %d logical slots at default will spill to disk under write load.", logicalSlots),
+			"Spill files accumulate in pg_replslot/<slot>/spill/ and persist until the slot is consumed. Consider 256MB+.",
+			"https://www.postgresql.org/docs/current/runtime-config-resource.html#GUC-LOGICAL-DECODING-WORK-MEM")}
+	}
+	if workMemKB <= defaultKB && logicalSlots >= 1 {
+		return []Finding{NewInfo(id, g09, name, obs,
+			"Consider increasing logical_decoding_work_mem to 256MB+ on busy primaries to avoid slot spill files.",
+			"Slot decoding spills to pg_replslot/<slot>/spill/ when this limit is exceeded.",
+			"https://www.postgresql.org/docs/current/runtime-config-resource.html#GUC-LOGICAL-DECODING-WORK-MEM")}
+	}
+	return []Finding{NewOK(id, g09, name, obs,
+		"https://www.postgresql.org/docs/current/runtime-config-resource.html#GUC-LOGICAL-DECODING-WORK-MEM")}
 }

@@ -52,6 +52,7 @@ func (g *G02Backrest) Run(ctx context.Context, db *pgxpool.Pool, cfg *config.Con
 	f = append(f, g02LastBackupAge(cfg)...)
 	f = append(f, g02RetentionFull(iniCfg, cfg)...)
 	f = append(f, g02ArchivePushQueueMax(iniCfg, cfg)...)
+	f = append(f, g02PITRChainIntegrity(ctx, db, cfg)...)
 	return f, nil
 }
 
@@ -338,6 +339,9 @@ func g02ArchiverFailures(ctx context.Context, db *pgxpool.Pool) []Finding {
 // backrestInfo represents the JSON output from `pgbackrest info`.
 type backrestInfo struct {
 	Backup []struct {
+		Lsn struct {
+			Stop string `json:"stop"`
+		} `json:"lsn"`
 		Timestamp struct {
 			Stop int64 `json:"stop"`
 		} `json:"timestamp"`
@@ -433,4 +437,84 @@ func g02ArchivePushQueueMax(iniCfg *ini.File, cfg *config.Config) []Finding {
 	return []Finding{NewOK("G02-014", g02, "archive-push-queue-max",
 		fmt.Sprintf("archive-push-queue-max = %s", val),
 		"https://pgbackrest.org/configuration.html#section-archive/option-archive-push-queue-max")}
+}
+
+// G02-015 PITR chain integrity — cross-references the last backup's stop LSN
+// against pg_stat_archiver to detect WAL gaps that would break point-in-time recovery.
+func g02PITRChainIntegrity(ctx context.Context, db *pgxpool.Pool, cfg *config.Config) []Finding {
+	const id = "G02-015"
+	const name = "PITR chain integrity"
+
+	// Parse pgbackrest info to find the last backup's stop LSN.
+	args := []string{"info", "--output=json", "--stanza=" + cfg.BackrestStanza}
+	if cfg.BackrestConfig != "" {
+		args = append(args, "--config="+cfg.BackrestConfig)
+	}
+	out, err := exec.Command("pgbackrest", args...).Output() //#nosec G204
+	if err != nil {
+		return []Finding{NewSkip(id, g02, name,
+			fmt.Sprintf("pgbackrest info failed: %v", err))}
+	}
+	var infos []backrestInfo
+	if err := json.Unmarshal(out, &infos); err != nil {
+		return []Finding{NewSkip(id, g02, name,
+			fmt.Sprintf("cannot parse pgbackrest info JSON: %v", err))}
+	}
+
+	var lastStopLSN string
+	for _, info := range infos {
+		if info.Name != cfg.BackrestStanza {
+			continue
+		}
+		for _, b := range info.Backup {
+			if b.Lsn.Stop != "" {
+				lastStopLSN = b.Lsn.Stop
+			}
+		}
+	}
+	if lastStopLSN == "" {
+		return []Finding{NewSkip(id, g02, name, "No backup LSN found in pgbackrest info")}
+	}
+
+	// Query pg_stat_archiver for the last archived LSN and current WAL LSN.
+	const q = `SELECT
+		last_archived_wal,
+		COALESCE(last_archived_wal, '') AS last_wal,
+		pg_walfile_name(pg_current_wal_lsn()) AS current_wal,
+		pg_wal_lsn_diff(pg_current_wal_lsn(), $1::pg_lsn) AS gap_from_backup_bytes,
+		CASE WHEN last_archived_wal IS NOT NULL
+		     THEN pg_wal_lsn_diff(pg_current_wal_lsn(), (regexp_replace(last_archived_wal, E'[^/]+$', '') || '0/0')::pg_lsn)
+		     ELSE -1 END AS archive_gap_bytes
+		FROM pg_stat_archiver`
+
+	var lastArchivedWAL, lastWAL, currentWAL string
+	var gapBytes, archiveGapBytes int64
+	err = db.QueryRow(ctx, q, lastStopLSN).Scan(
+		&lastArchivedWAL, &lastWAL, &currentWAL, &gapBytes, &archiveGapBytes)
+	if err != nil {
+		return []Finding{NewSkip(id, g02, name, err.Error())}
+	}
+
+	gapGB := gapBytes / 1024 / 1024 / 1024
+	obs := fmt.Sprintf("Last backup stop LSN: %s  |  Current WAL: %s  |  Gap: %dGB",
+		lastStopLSN, currentWAL, gapGB)
+
+	// A very large gap means WAL archiving has been silent for a long time — PITR
+	// recovery to current point would require all that WAL to be present in the archive.
+	const critGapGB = 50
+	const warnGapGB = 10
+	if gapGB >= critGapGB {
+		return []Finding{NewCrit(id, g02, name, obs,
+			fmt.Sprintf("%dGB of WAL generated since last backup — verify WAL archive is complete for PITR.", gapGB),
+			fmt.Sprintf("Last archived WAL: %s\nRun: pgbackrest --stanza=%s verify", lastWAL, cfg.BackrestStanza),
+			"https://pgbackrest.org/command.html#command-verify")}
+	}
+	if gapGB >= warnGapGB {
+		return []Finding{NewWarn(id, g02, name, obs,
+			fmt.Sprintf("%dGB of WAL generated since last backup — consider a new backup to shorten PITR recovery time.", gapGB),
+			fmt.Sprintf("Last archived WAL: %s", lastWAL),
+			"https://pgbackrest.org/command.html#command-backup")}
+	}
+	return []Finding{NewOK(id, g02, name, obs,
+		"https://pgbackrest.org/command.html#command-verify")}
 }

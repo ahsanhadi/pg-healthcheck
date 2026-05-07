@@ -42,6 +42,9 @@ spock_exception_log_warn_rows:  10000
 spock_exception_log_crit_rows:  100000
 spock_resolutions_warn_rows:    50000
 spock_old_exception_days:       7
+spock_exception_retry_warn_mins: 60   # WARN if unresolved exceptions are older than this (crash loop detection, G12-025)
+spill_warn_mb:                  500   # WARN if pg_replslot/<slot>/spill/ exceeds this (G12-024)
+spill_critical_mb:              2000  # CRITICAL if spill exceeds this (G12-024)
 
 # ── amcheck ───────────────────────────────────────────────────
 # List tables to run structural B-tree verification on.
