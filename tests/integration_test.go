@@ -307,8 +307,7 @@ func TestG09_InactiveSlot(t *testing.T) {
 	setupSchema(t, pool)
 	defer teardown(t, pool)
 
-	ctx := context.Background()
-	pool.Exec(ctx, //nolint:gosec // nosemgrep
+	pool.Exec(context.Background(), //nolint:gosec // nosemgrep
 		`SELECT pg_drop_replication_slot('_hc_test_inactive_slot')
 		                WHERE EXISTS(SELECT 1 FROM pg_replication_slots
 		                             WHERE slot_name='_hc_test_inactive_slot')`)

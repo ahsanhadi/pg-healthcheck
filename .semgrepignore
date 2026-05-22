@@ -1,0 +1,4 @@
+# Integration tests use controlled test infrastructure.
+# SQL strings are hardcoded test fixtures (not user input) and the binary path
+# is resolved from a known repository location via filepath.Abs.
+tests/integration_test.go

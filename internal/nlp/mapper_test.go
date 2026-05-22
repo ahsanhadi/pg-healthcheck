@@ -165,15 +165,7 @@ func TestMapQuery_ollamaPath(t *testing.T) {
 
 func TestMapQuery_keywordFallback(t *testing.T) {
 	// Point to a guaranteed-unreachable host so Ollama fails immediately.
-	cfg := config.Defaults()
-	cfg.OllamaHost = "http://127.0.0.1:19999"
-	cfg.OllamaTimeoutSeconds = 1
-
-	res, err := MapQuery("check for TOAST corruption", cfg)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertKeywordResult(t, res, "G07")
+	assertToastKeywordFallback(t, config.Defaults())
 }
 
 func TestMapQuery_noMatch(t *testing.T) {
@@ -363,14 +355,7 @@ func TestMapQuery_openai_keywordFallback(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.LLMProvider = "openai"
 	cfg.LLMAPIKey = "sk-test"
-	cfg.OllamaHost = "http://127.0.0.1:19999" // unreachable
-	cfg.OllamaTimeoutSeconds = 1
-
-	res, err := MapQuery("check for TOAST corruption", cfg)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertKeywordResult(t, res, "G07")
+	assertToastKeywordFallback(t, cfg)
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -402,6 +387,19 @@ func assertEqual(t *testing.T, got, want []string) {
 			t.Errorf("index %d: got %q want %q", i, got[i], want[i])
 		}
 	}
+}
+
+// assertToastKeywordFallback sets an unreachable Ollama host on cfg, calls
+// MapQuery with a TOAST corruption query, and asserts keyword-fallback with G07.
+func assertToastKeywordFallback(t *testing.T, cfg *config.Config) {
+	t.Helper()
+	cfg.OllamaHost = "http://127.0.0.1:19999"
+	cfg.OllamaTimeoutSeconds = 1
+	res, err := MapQuery("check for TOAST corruption", cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertKeywordResult(t, res, "G07")
 }
 
 func assertLLMResult(t *testing.T, res MapResult, wantProvider string, wantGroups ...string) {

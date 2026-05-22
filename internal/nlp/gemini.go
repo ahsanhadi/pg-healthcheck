@@ -19,15 +19,15 @@ type geminiProvider struct {
 func (p *geminiProvider) Name() string { return "gemini/" + p.model }
 
 func (p *geminiProvider) Ask(prompt string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
-	defer cancel()
-
 	body, err := json.Marshal(geminiRequest(prompt))
 	if err != nil {
 		return "", fmt.Errorf("gemini: marshalling request: %w", err)
 	}
 
 	url := fmt.Sprintf("%s/%s:generateContent?key=%s", geminiBaseURL, p.model, p.apiKey)
+	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
+	defer cancel()
+
 	data, err := doJSONPost(ctx, url, body, nil)
 	if err != nil {
 		return "", fmt.Errorf("gemini: %w", err)
