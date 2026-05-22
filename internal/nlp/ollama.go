@@ -18,7 +18,7 @@ type ollamaProvider struct {
 	timeout time.Duration
 }
 
-func (p *ollamaProvider) Query(prompt string) (string, error) {
+func (p *ollamaProvider) Ask(prompt string) (string, error) {
 	return QueryOllama(p.host, p.model, prompt, p.timeout)
 }
 

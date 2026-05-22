@@ -18,7 +18,7 @@ type openAIProvider struct {
 
 func (p *openAIProvider) Name() string { return "openai/" + p.model }
 
-func (p *openAIProvider) Query(prompt string) (string, error) {
+func (p *openAIProvider) Ask(prompt string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
 	defer cancel()
 

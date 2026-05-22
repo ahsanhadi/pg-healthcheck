@@ -18,7 +18,7 @@ type geminiProvider struct {
 
 func (p *geminiProvider) Name() string { return "gemini/" + p.model }
 
-func (p *geminiProvider) Query(prompt string) (string, error) {
+func (p *geminiProvider) Ask(prompt string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
 	defer cancel()
 

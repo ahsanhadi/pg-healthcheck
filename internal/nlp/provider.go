@@ -9,9 +9,9 @@ import (
 )
 
 // Provider is the interface implemented by every LLM backend.
-// Query sends a prompt and returns the model's raw text response.
+// Ask sends a prompt and returns the model's raw text response.
 type Provider interface {
-	Query(prompt string) (string, error)
+	Ask(prompt string) (string, error)
 	// Name returns a human-readable label such as "ollama/llama3.2".
 	Name() string
 }

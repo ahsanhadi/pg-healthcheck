@@ -89,6 +89,14 @@ var spockChecker = &checks.G12SpockCluster{}
 // ── Entry point ──────────────────────────────────────────────────────────────
 
 func main() {
+	root := buildRootCmd()
+	root.AddCommand(buildAskCmd())
+	if err := root.Execute(); err != nil {
+		os.Exit(2)
+	}
+}
+
+func buildRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:     "pg-healthcheck",
 		Short:   "Enterprise PostgreSQL health diagnostics",
@@ -101,7 +109,6 @@ Output is either coloured terminal text (default) or JSON for GUI / API use.`,
 		SilenceUsage: true,
 		RunE:         run,
 	}
-
 	// PersistentFlags are inherited by all subcommands (e.g. ask).
 	pf := root.PersistentFlags()
 	pf.StringVar(&flagHost, "host", "localhost", "PostgreSQL host")
@@ -118,8 +125,10 @@ Output is either coloured terminal text (default) or JSON for GUI / API use.`,
 	pf.StringVar(&flagBackrestConf, "backrest-config", "", "Path to pgbackrest.conf")
 	pf.BoolVar(&flagNoColor, "no-color", false, "Disable terminal colour")
 	pf.BoolVar(&flagVerbose, "verbose", false, "Show OK findings (hidden by default)")
+	return root
+}
 
-	// ask subcommand — natural language interface via Ollama
+func buildAskCmd() *cobra.Command {
 	askCmd := &cobra.Command{
 		Use:   "ask <query>",
 		Short: "Run checks selected by a natural-language query (uses Ollama LLM or keyword fallback)",
@@ -147,12 +156,7 @@ Examples:
 	askCmd.Flags().StringVar(&flagOllamaHost, "ollama-host", "", "Ollama server URL or OpenAI-compatible base URL (default: from config)")
 	askCmd.Flags().StringVar(&flagOllamaModel, "ollama-model", "", "Model name override (default: from config)")
 	askCmd.Flags().IntVar(&flagOllamaTimeout, "ollama-timeout", 0, "LLM request timeout in seconds (default: from config or 30)")
-
-	root.AddCommand(askCmd)
-
-	if err := root.Execute(); err != nil {
-		os.Exit(2)
-	}
+	return askCmd
 }
 
 // ── run ──────────────────────────────────────────────────────────────────────

@@ -228,7 +228,7 @@ func TestQueryOpenAI_serverError(t *testing.T) {
 	defer srv.Close()
 
 	p := &openAIProvider{baseURL: srv.URL, model: "gpt-4o-mini", apiKey: "bad", timeout: 5 * time.Second}
-	_, err := p.Query("test")
+	_, err := p.Ask("test")
 	if err == nil {
 		t.Fatal("expected error for HTTP 401, got nil")
 	}
@@ -236,7 +236,7 @@ func TestQueryOpenAI_serverError(t *testing.T) {
 
 func TestQueryOpenAI_unreachable(t *testing.T) {
 	p := &openAIProvider{baseURL: "http://127.0.0.1:19999", model: "gpt-4o-mini", apiKey: "k", timeout: 2 * time.Second}
-	_, err := p.Query("test")
+	_, err := p.Ask("test")
 	if err == nil {
 		t.Fatal("expected error for unreachable host, got nil")
 	}
@@ -291,7 +291,7 @@ func TestQueryGemini_success(t *testing.T) {
 func TestQueryGemini_serverError(t *testing.T) {
 	p := &geminiProvider{model: "gemini-1.5-flash", apiKey: "bad", timeout: 2 * time.Second}
 	// The real Gemini URL will be unreachable in unit tests — that's the expected behavior.
-	_, err := p.Query("test")
+	_, err := p.Ask("test")
 	if err == nil {
 		t.Fatal("expected error when Gemini is unreachable, got nil")
 	}
