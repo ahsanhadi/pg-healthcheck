@@ -70,7 +70,7 @@ func runBinary(t *testing.T, args []string) map[string]checkResult {
 	if err != nil {
 		t.Fatalf("failed to resolve binary path %q: %v", *binary, err)
 	}
-	cmd := exec.Command(binPath, args...) //nolint:gosec // nosemgrep: dangerous-exec-command -- test binary path is resolved from a known repo location, args are controlled test flags
+	cmd := exec.Command(binPath, args...) // #nosec G204 -- test binary path resolved via filepath.Abs from repo root; args are controlled test flags
 	// Run from repo root so default ./healthcheck.yaml is picked up.
 	// Running from tests/ leaves cfg.CheckTimeout at zero (no YAML load),
 	// causing near-immediate context deadline exceeded in many checks.
@@ -124,7 +124,7 @@ func db(t *testing.T) *pgxpool.Pool {
 // exec runs a SQL statement and fails the test on error.
 func mustExec(t *testing.T, pool *pgxpool.Pool, sql string, args ...any) {
 	t.Helper()
-	if _, err := pool.Exec(context.Background(), sql, args...); err != nil { //nolint:gosec // nosemgrep: go.lang.security.audit.database.string-formatted-query -- hardcoded SQL literals only, no user input
+	if _, err := pool.Exec(context.Background(), sql, args...); err != nil { // #nosec -- callers always pass hardcoded SQL literals; args are parameterised query placeholders
 		t.Fatalf("SQL failed: %v\nSQL: %s", err, sql)
 	}
 }
