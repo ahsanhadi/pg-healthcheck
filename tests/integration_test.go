@@ -57,22 +57,11 @@ type report struct {
 	Checks []checkResult `json:"checks"`
 }
 
-// runHealthcheck executes the binary and returns parsed findings.
-func runHealthcheck(t *testing.T, extraArgs ...string) map[string]checkResult {
+// runBinary resolves the binary, executes it with args from the repo root, parses
+// JSON output, and returns a check-ID-keyed results map. Shared by runHealthcheck
+// and runAsk to avoid duplicating binary resolution and JSON parsing.
+func runBinary(t *testing.T, args []string) map[string]checkResult {
 	t.Helper()
-	args := []string{
-		"--host", *pgHost,
-		"--port", fmt.Sprintf("%d", *pgPort),
-		"--dbname", *pgDBName,
-		"--user", *pgUser,
-		"--output", "json",
-		"--verbose",
-	}
-	if *pgPass != "" {
-		args = append(args, "--password", *pgPass)
-	}
-	args = append(args, extraArgs...)
-
 	// Go test changes CWD to the package directory (tests/) before running,
 	// so binary paths like "./pg-healthcheck" are relative to tests/ — not the
 	// repo root where the binary is actually built.  Resolve from ".." (repo root)
@@ -90,14 +79,31 @@ func runHealthcheck(t *testing.T, extraArgs ...string) map[string]checkResult {
 
 	var r report
 	if err := json.Unmarshal(out, &r); err != nil {
-		t.Fatalf("failed to parse healthcheck output: %v\nraw: %s", err, string(out))
+		t.Fatalf("failed to parse binary output: %v\nraw: %s", err, string(out))
 	}
-
 	results := make(map[string]checkResult, len(r.Checks))
 	for _, c := range r.Checks {
 		results[c.CheckID] = c
 	}
 	return results
+}
+
+// runHealthcheck executes the binary and returns parsed findings.
+func runHealthcheck(t *testing.T, extraArgs ...string) map[string]checkResult {
+	t.Helper()
+	args := []string{
+		"--host", *pgHost,
+		"--port", fmt.Sprintf("%d", *pgPort),
+		"--dbname", *pgDBName,
+		"--user", *pgUser,
+		"--output", "json",
+		"--verbose",
+	}
+	if *pgPass != "" {
+		args = append(args, "--password", *pgPass)
+	}
+	args = append(args, extraArgs...)
+	return runBinary(t, args)
 }
 
 // db opens a direct connection for injecting/cleaning test conditions.
@@ -179,7 +185,17 @@ func TestG05_DeadTuples(t *testing.T) {
 	mustExec(t, pool, `INSERT INTO _hc_test.bloat(data) SELECT repeat('x',200) FROM generate_series(1,60000)`)
 	mustExec(t, pool, `DELETE FROM _hc_test.bloat WHERE id % 5 != 0`)
 	// Flush stats so pg_stat_user_tables reflects the new dead-tuple counts immediately.
-	mustExec(t, pool, `SELECT pg_stat_force_next_flush()`)
+	// pg_stat_force_next_flush() was added in PG 15; on older versions we clear the
+	// cached snapshot and sleep briefly so the stats collector can catch up.
+	mustExec(t, pool, `DO $$
+BEGIN
+  IF current_setting('server_version_num')::int >= 150000 THEN
+    PERFORM pg_stat_force_next_flush();
+  ELSE
+    PERFORM pg_sleep(0.5);
+    PERFORM pg_stat_clear_snapshot();
+  END IF;
+END$$`)
 	// do NOT vacuum — leave dead tuples in place
 
 	results := runHealthcheck(t, "--groups", "G05")
@@ -665,24 +681,7 @@ func runAsk(t *testing.T, query string, extraArgs ...string) map[string]checkRes
 		args = append(args, "--password", *pgPass)
 	}
 	args = append(args, extraArgs...)
-
-	binPath, err := filepath.Abs(filepath.Join("..", *binary))
-	if err != nil {
-		t.Fatalf("failed to resolve binary path: %v", err)
-	}
-	cmd := exec.Command(binPath, args...)
-	cmd.Dir = ".."
-	out, _ := cmd.Output()
-
-	var r report
-	if err := json.Unmarshal(out, &r); err != nil {
-		t.Fatalf("failed to parse ask output: %v\nraw: %s", err, string(out))
-	}
-	results := make(map[string]checkResult, len(r.Checks))
-	for _, c := range r.Checks {
-		results[c.CheckID] = c
-	}
-	return results
+	return runBinary(t, args)
 }
 
 // TestAsk_ToastKeyword verifies that asking about TOAST corruption runs G07 checks.

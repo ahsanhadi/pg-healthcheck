@@ -41,35 +41,41 @@ func NewProvider(cfg *config.Config) (Provider, error) {
 
 	switch cfg.LLMProvider {
 	case "openai":
-		apiKey := resolveAPIKey(cfg.LLMAPIKey, "OPENAI_API_KEY")
-		if apiKey == "" {
-			return nil, fmt.Errorf("provider openai requires an API key; set --api-key, llm_api_key in config, or OPENAI_API_KEY env var")
-		}
-		if model == "" || model == "llama3.2" {
-			model = defaultModels["openai"]
-		}
-		baseURL := cfg.OllamaHost
-		if baseURL == "" || baseURL == "http://localhost:11434" {
-			baseURL = "https://api.openai.com"
-		}
-		return &openAIProvider{baseURL: baseURL, model: model, apiKey: apiKey, timeout: timeout}, nil
-
+		return buildOpenAIProvider(cfg, timeout, model)
 	case "gemini":
-		apiKey := resolveAPIKey(cfg.LLMAPIKey, "GEMINI_API_KEY")
-		if apiKey == "" {
-			return nil, fmt.Errorf("provider gemini requires an API key; set --api-key, llm_api_key in config, or GEMINI_API_KEY env var")
-		}
-		if model == "" || model == "llama3.2" {
-			model = defaultModels["gemini"]
-		}
-		return &geminiProvider{model: model, apiKey: apiKey, timeout: timeout}, nil
-
+		return buildGeminiProvider(cfg, timeout, model)
 	default: // "ollama" or anything unrecognised
 		if model == "" {
 			model = "llama3.2"
 		}
 		return &ollamaProvider{host: cfg.OllamaHost, model: model, timeout: timeout}, nil
 	}
+}
+
+func buildOpenAIProvider(cfg *config.Config, timeout time.Duration, model string) (Provider, error) {
+	apiKey := resolveAPIKey(cfg.LLMAPIKey, "OPENAI_API_KEY")
+	if apiKey == "" {
+		return nil, fmt.Errorf("provider openai requires an API key; set --api-key, llm_api_key in config, or OPENAI_API_KEY env var")
+	}
+	if model == "" || model == "llama3.2" {
+		model = defaultModels["openai"]
+	}
+	baseURL := cfg.OllamaHost
+	if baseURL == "" || baseURL == "http://localhost:11434" {
+		baseURL = "https://api.openai.com"
+	}
+	return &openAIProvider{baseURL: baseURL, model: model, apiKey: apiKey, timeout: timeout}, nil
+}
+
+func buildGeminiProvider(cfg *config.Config, timeout time.Duration, model string) (Provider, error) {
+	apiKey := resolveAPIKey(cfg.LLMAPIKey, "GEMINI_API_KEY")
+	if apiKey == "" {
+		return nil, fmt.Errorf("provider gemini requires an API key; set --api-key, llm_api_key in config, or GEMINI_API_KEY env var")
+	}
+	if model == "" || model == "llama3.2" {
+		model = defaultModels["gemini"]
+	}
+	return &geminiProvider{model: model, apiKey: apiKey, timeout: timeout}, nil
 }
 
 // resolveAPIKey returns the first non-empty value from: explicit key, env var.

@@ -160,13 +160,7 @@ func TestMapQuery_ollamaPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if res.Source != SourceLLM {
-		t.Errorf("expected SourceLLM, got %v", res.Source)
-	}
-	if res.ProviderName != "ollama/llama3.2" {
-		t.Errorf("expected provider name ollama/llama3.2, got %q", res.ProviderName)
-	}
-	assertContains(t, res.Groups, "G07")
+	assertLLMResult(t, res, "ollama/llama3.2", "G07")
 }
 
 func TestMapQuery_keywordFallback(t *testing.T) {
@@ -179,10 +173,7 @@ func TestMapQuery_keywordFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if res.Source != SourceKeyword {
-		t.Errorf("expected SourceKeyword, got %v", res.Source)
-	}
-	assertContains(t, res.Groups, "G07")
+	assertKeywordResult(t, res, "G07")
 }
 
 func TestMapQuery_noMatch(t *testing.T) {
@@ -226,14 +217,7 @@ func TestQueryOpenAI_success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if res.Source != SourceLLM {
-		t.Errorf("expected SourceLLM, got %v", res.Source)
-	}
-	if res.ProviderName != "openai/gpt-4o-mini" {
-		t.Errorf("expected openai/gpt-4o-mini, got %q", res.ProviderName)
-	}
-	assertContains(t, res.Groups, "G07")
-	assertContains(t, res.Groups, "G14")
+	assertLLMResult(t, res, "openai/gpt-4o-mini", "G07", "G14")
 }
 
 func TestQueryOpenAI_serverError(t *testing.T) {
@@ -386,10 +370,7 @@ func TestMapQuery_openai_keywordFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if res.Source != SourceKeyword {
-		t.Errorf("expected SourceKeyword fallback, got %v", res.Source)
-	}
-	assertContains(t, res.Groups, "G07")
+	assertKeywordResult(t, res, "G07")
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -420,5 +401,28 @@ func assertEqual(t *testing.T, got, want []string) {
 		if got[i] != want[i] {
 			t.Errorf("index %d: got %q want %q", i, got[i], want[i])
 		}
+	}
+}
+
+func assertLLMResult(t *testing.T, res MapResult, wantProvider string, wantGroups ...string) {
+	t.Helper()
+	if res.Source != SourceLLM {
+		t.Errorf("expected SourceLLM, got %v", res.Source)
+	}
+	if res.ProviderName != wantProvider {
+		t.Errorf("expected provider %q, got %q", wantProvider, res.ProviderName)
+	}
+	for _, g := range wantGroups {
+		assertContains(t, res.Groups, g)
+	}
+}
+
+func assertKeywordResult(t *testing.T, res MapResult, wantGroups ...string) {
+	t.Helper()
+	if res.Source != SourceKeyword {
+		t.Errorf("expected SourceKeyword, got %v", res.Source)
+	}
+	for _, g := range wantGroups {
+		assertContains(t, res.Groups, g)
 	}
 }

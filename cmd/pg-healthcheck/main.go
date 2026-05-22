@@ -160,7 +160,12 @@ Examples:
 func run(cmd *cobra.Command, _ []string) error {
 	// Build config: defaults → YAML file → CLI overrides
 	cfg := buildConfig(cmd)
+	return runChecksAndReport(cfg, cmd)
+}
 
+// runChecksAndReport validates groups, runs the check pipeline, and outputs
+// results. Shared by run and runAsk to avoid duplicating the dispatch logic.
+func runChecksAndReport(cfg *config.Config, cmd *cobra.Command) error {
 	// Validate group IDs before doing anything else.
 	// This catches mistakes like `--groups --help` where pflag
 	// consumes the next token as the flag value.
@@ -170,12 +175,8 @@ func run(cmd *cobra.Command, _ []string) error {
 
 	checkers := selectCheckers(cfg.Groups)
 
-	var (
-		allFindings []checks.Finding
-		pgVersion   string
-		hostname    string
-	)
-
+	var allFindings []checks.Finding
+	var pgVersion, hostname string
 	switch cfg.Mode {
 	case "cluster":
 		allFindings, pgVersion, hostname = runCluster(cfg, checkers)
@@ -183,17 +184,22 @@ func run(cmd *cobra.Command, _ []string) error {
 		allFindings, pgVersion, hostname = runSingle(cfg, checkers)
 	}
 
+	outputFindings(cfg, allFindings, pgVersion, hostname)
+	return nil
+}
+
+// outputFindings writes results to stdout in the configured format, then exits
+// with the appropriate exit code.
+func outputFindings(cfg *config.Config, findings []checks.Finding, pgVersion, hostname string) {
 	switch cfg.Output {
 	case "json":
-		if err := report.PrintJSON(allFindings, pgVersion, hostname, cfg.Mode, os.Stdout); err != nil {
+		if err := report.PrintJSON(findings, pgVersion, hostname, cfg.Mode, os.Stdout); err != nil {
 			fmt.Fprintf(os.Stderr, "json error: %v\n", err)
 		}
 	default:
-		report.PrintText(allFindings, pgVersion, hostname, cfg.Mode, cfg.Verbose, cfg.NoColor)
+		report.PrintText(findings, pgVersion, hostname, cfg.Mode, cfg.Verbose, cfg.NoColor)
 	}
-
-	os.Exit(report.ExitCode(allFindings))
-	return nil
+	os.Exit(report.ExitCode(findings))
 }
 
 // ── Single-node run ──────────────────────────────────────────────────────────
@@ -405,8 +411,25 @@ func flagChanged(cmd *cobra.Command, name string) bool {
 func runAsk(cmd *cobra.Command, args []string) error {
 	query := args[0]
 	cfg := buildConfig(cmd)
+	applyLLMFlags(cmd, cfg)
 
-	// Override LLM settings if explicitly passed on the command line.
+	fmt.Fprintf(os.Stderr, "Analyzing query (provider: %s)...\n", cfg.LLMProvider)
+
+	result, err := nlp.MapQuery(query, cfg)
+	if err != nil {
+		return err
+	}
+
+	logMapResult(result)
+
+	// Inject matched groups and run the standard health-check pipeline.
+	cfg.Groups = result.Groups
+	return runChecksAndReport(cfg, cmd)
+}
+
+// applyLLMFlags copies ask-subcommand-specific flag values into cfg when
+// the flag was explicitly set on the command line (not just its default).
+func applyLLMFlags(cmd *cobra.Command, cfg *config.Config) {
 	if flagChanged(cmd, "provider") {
 		cfg.LLMProvider = flagLLMProvider
 	}
@@ -422,61 +445,21 @@ func runAsk(cmd *cobra.Command, args []string) error {
 	if flagChanged(cmd, "ollama-timeout") {
 		cfg.OllamaTimeoutSeconds = flagOllamaTimeout
 	}
+}
 
-	fmt.Fprintf(os.Stderr, "Analyzing query (provider: %s)...\n", cfg.LLMProvider)
-
-	result, err := nlp.MapQuery(query, cfg)
-	if err != nil {
-		return err
-	}
-
+// logMapResult writes the LLM source and matched-group summary to stderr.
+func logMapResult(result nlp.MapResult) {
 	switch result.Source {
 	case nlp.SourceLLM:
 		fmt.Fprintf(os.Stderr, "Provider: %s\n", result.ProviderName)
 	default:
 		fmt.Fprintf(os.Stderr, "Note: LLM unavailable — using keyword matching\n")
 	}
-
-	// Build human-readable group list for the status line.
 	var groupLabels []string
 	for _, id := range result.Groups {
 		groupLabels = append(groupLabels, fmt.Sprintf("%s (%s)", id, nlp.GroupName(id)))
 	}
 	fmt.Fprintf(os.Stderr, "Matched groups: %s\n\n", strings.Join(groupLabels, ", "))
-
-	// Inject matched groups and run the standard health-check pipeline.
-	cfg.Groups = result.Groups
-
-	if err := validateGroups(cfg.Groups, cmd); err != nil {
-		return err
-	}
-
-	checkers := selectCheckers(cfg.Groups)
-
-	var (
-		allFindings []checks.Finding
-		pgVersion   string
-		hostname    string
-	)
-
-	switch cfg.Mode {
-	case "cluster":
-		allFindings, pgVersion, hostname = runCluster(cfg, checkers)
-	default:
-		allFindings, pgVersion, hostname = runSingle(cfg, checkers)
-	}
-
-	switch cfg.Output {
-	case "json":
-		if err := report.PrintJSON(allFindings, pgVersion, hostname, cfg.Mode, os.Stdout); err != nil {
-			fmt.Fprintf(os.Stderr, "json error: %v\n", err)
-		}
-	default:
-		report.PrintText(allFindings, pgVersion, hostname, cfg.Mode, cfg.Verbose, cfg.NoColor)
-	}
-
-	os.Exit(report.ExitCode(allFindings))
-	return nil
 }
 
 // validateGroups checks that every requested group ID actually exists.

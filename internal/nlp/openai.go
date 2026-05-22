@@ -1,12 +1,9 @@
 package nlp
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"time"
 )
 
@@ -25,46 +22,37 @@ func (p *openAIProvider) Query(prompt string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
 	defer cancel()
 
-	type message struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	}
-	type reqBody struct {
-		Model     string    `json:"model"`
-		Messages  []message `json:"messages"`
-		MaxTokens int       `json:"max_tokens"`
-	}
-	body, err := json.Marshal(reqBody{
-		Model:     p.model,
-		Messages:  []message{{Role: "user", Content: prompt}},
-		MaxTokens: 50,
-	})
+	body, err := json.Marshal(openAIRequest(p.model, prompt))
 	if err != nil {
 		return "", fmt.Errorf("openai: marshalling request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		p.baseURL+"/v1/chat/completions", bytes.NewReader(body))
+	headers := map[string]string{"Authorization": "Bearer " + p.apiKey}
+	data, err := doJSONPost(ctx, p.baseURL+"/v1/chat/completions", body, headers)
 	if err != nil {
-		return "", fmt.Errorf("openai: building request: %w", err)
+		return "", fmt.Errorf("openai: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	return parseOpenAIResponse(data)
+}
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("openai: request failed: %w", err)
+func openAIRequest(model, prompt string) any {
+	type message struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
 	}
-	defer resp.Body.Close()
+	type body struct {
+		Model     string    `json:"model"`
+		Messages  []message `json:"messages"`
+		MaxTokens int       `json:"max_tokens"`
+	}
+	return body{
+		Model:     model,
+		Messages:  []message{{Role: "user", Content: prompt}},
+		MaxTokens: 50,
+	}
+}
 
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("openai: reading response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("openai: HTTP %d: %s", resp.StatusCode, truncate(string(data), 200))
-	}
-
+func parseOpenAIResponse(data []byte) (string, error) {
 	var result struct {
 		Choices []struct {
 			Message struct {

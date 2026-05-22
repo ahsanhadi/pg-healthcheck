@@ -59,7 +59,7 @@ func MapQuery(query string, cfg *config.Config) (MapResult, error) {
 
 	provider, err := NewProvider(cfg)
 	if err == nil {
-		raw, qErr := provider.Query(prompt)
+		raw, qErr := provider.Query(prompt) //#nosec G201 -- LLM API call, not SQL
 		if qErr == nil {
 			if groups := parseGroupIDs(raw); len(groups) > 0 {
 				return MapResult{
