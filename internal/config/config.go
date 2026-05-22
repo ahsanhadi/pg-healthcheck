@@ -87,6 +87,16 @@ type Config struct {
 	CrossNodeTables            []string `yaml:"cross_node_tables"`
 	CrossNodeCountThresholdPct float64  `yaml:"cross_node_count_threshold_pct"`
 
+	// ── Natural Language Interface ─────────────────────────
+	// LLMProvider selects the backend: "ollama" (default), "openai", "gemini".
+	LLMProvider string `yaml:"llm_provider"`
+	// LLMAPIKey holds the API key for cloud providers.
+	// If empty, OPENAI_API_KEY or GEMINI_API_KEY env vars are checked instead.
+	LLMAPIKey            string `yaml:"llm_api_key"`
+	OllamaHost           string `yaml:"ollama_host"`
+	OllamaModel          string `yaml:"ollama_model"`
+	OllamaTimeoutSeconds int    `yaml:"ollama_timeout_seconds"`
+
 	// ── Runtime (set by CLI, not YAML) ─────────────────────
 	Mode            string        `yaml:"-"` // "single" | "cluster"
 	Output          string        `yaml:"-"` // "text" | "json"
@@ -148,6 +158,11 @@ func Defaults() *Config {
 		Mode:                       "single",
 		Output:                     "text",
 		CheckTimeoutSec:            10,
+		LLMProvider:                "ollama",
+		LLMAPIKey:                  "",
+		OllamaHost:                 "http://localhost:11434",
+		OllamaModel:                "llama3.2",
+		OllamaTimeoutSeconds:       30,
 	}
 }
 

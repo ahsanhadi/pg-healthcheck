@@ -26,6 +26,7 @@ import (
 	"github.com/pgedge/pg-healthcheck/internal/checks"
 	"github.com/pgedge/pg-healthcheck/internal/config"
 	"github.com/pgedge/pg-healthcheck/internal/connector"
+	"github.com/pgedge/pg-healthcheck/internal/nlp"
 	"github.com/pgedge/pg-healthcheck/internal/report"
 	"github.com/spf13/cobra"
 )
@@ -55,6 +56,13 @@ var (
 	flagBackrestConf  string
 	flagNoColor       bool
 	flagVerbose       bool
+
+	// ask subcommand flags
+	flagOllamaHost    string
+	flagOllamaModel   string
+	flagOllamaTimeout int
+	flagLLMProvider   string
+	flagAPIKey        string
 )
 
 // allCheckers lists every single-node check group in run order.
@@ -94,21 +102,53 @@ Output is either coloured terminal text (default) or JSON for GUI / API use.`,
 		RunE:         run,
 	}
 
-	f := root.Flags()
-	f.StringVar(&flagHost, "host", "localhost", "PostgreSQL host")
-	f.IntVar(&flagPort, "port", 5432, "PostgreSQL port")
-	f.StringVar(&flagDBName, "dbname", "postgres", "Database name")
-	f.StringVar(&flagUser, "user", "postgres", "Role name (or PGUSER env var)")
-	f.StringVar(&flagPassword, "password", "", "Password (prefer PGPASSWORD env var)")
-	f.StringVar(&flagMode, "mode", "single", "Run mode: single | cluster")
-	f.StringVar(&flagNodes, "nodes", "", "Comma-separated host:port list for cluster mode")
-	f.StringVar(&flagConfigFile, "config", "", "Path to YAML config file")
-	f.StringVar(&flagOutput, "output", "text", "Output format: text | json")
-	f.StringVar(&flagGroups, "groups", "", "Groups to run, e.g. G01,G05 (default: all)")
-	f.IntVar(&flagTargetVersion, "target-version", 0, "Target PG major version for G10 upgrade checks")
-	f.StringVar(&flagBackrestConf, "backrest-config", "", "Path to pgbackrest.conf")
-	f.BoolVar(&flagNoColor, "no-color", false, "Disable terminal colour")
-	f.BoolVar(&flagVerbose, "verbose", false, "Show OK findings (hidden by default)")
+	// PersistentFlags are inherited by all subcommands (e.g. ask).
+	pf := root.PersistentFlags()
+	pf.StringVar(&flagHost, "host", "localhost", "PostgreSQL host")
+	pf.IntVar(&flagPort, "port", 5432, "PostgreSQL port")
+	pf.StringVar(&flagDBName, "dbname", "postgres", "Database name")
+	pf.StringVar(&flagUser, "user", "postgres", "Role name (or PGUSER env var)")
+	pf.StringVar(&flagPassword, "password", "", "Password (prefer PGPASSWORD env var)")
+	pf.StringVar(&flagMode, "mode", "single", "Run mode: single | cluster")
+	pf.StringVar(&flagNodes, "nodes", "", "Comma-separated host:port list for cluster mode")
+	pf.StringVar(&flagConfigFile, "config", "", "Path to YAML config file")
+	pf.StringVar(&flagOutput, "output", "text", "Output format: text | json")
+	pf.StringVar(&flagGroups, "groups", "", "Groups to run, e.g. G01,G05 (default: all)")
+	pf.IntVar(&flagTargetVersion, "target-version", 0, "Target PG major version for G10 upgrade checks")
+	pf.StringVar(&flagBackrestConf, "backrest-config", "", "Path to pgbackrest.conf")
+	pf.BoolVar(&flagNoColor, "no-color", false, "Disable terminal colour")
+	pf.BoolVar(&flagVerbose, "verbose", false, "Show OK findings (hidden by default)")
+
+	// ask subcommand — natural language interface via Ollama
+	askCmd := &cobra.Command{
+		Use:   "ask <query>",
+		Short: "Run checks selected by a natural-language query (uses Ollama LLM or keyword fallback)",
+		Long: `ask maps a plain-English question to one or more check groups and runs only those.
+
+Supports three LLM providers via --provider:
+  ollama   Local Ollama server (default, air-gapped friendly)
+  openai   OpenAI GPT or any OpenAI-compatible API (Azure, Groq, etc.)
+  gemini   Google Gemini
+
+If the LLM provider is unavailable or no API key is found, the tool
+automatically falls back to built-in keyword matching.
+
+Examples:
+  pg-healthcheck ask "check for TOAST table corruption" --host db1
+  pg-healthcheck ask "WAL disk usage?" --provider openai --api-key sk-... --host db1
+  pg-healthcheck ask "any lock contention?" --provider gemini --api-key AIza... --host db1
+  OPENAI_API_KEY=sk-... pg-healthcheck ask "replication lag" --provider openai --host db1`,
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE:         runAsk,
+	}
+	askCmd.Flags().StringVar(&flagLLMProvider, "provider", "", "LLM provider: ollama | openai | gemini (default: from config or ollama)")
+	askCmd.Flags().StringVar(&flagAPIKey, "api-key", "", "API key for cloud providers (or set OPENAI_API_KEY / GEMINI_API_KEY env var)")
+	askCmd.Flags().StringVar(&flagOllamaHost, "ollama-host", "", "Ollama server URL or OpenAI-compatible base URL (default: from config)")
+	askCmd.Flags().StringVar(&flagOllamaModel, "ollama-model", "", "Model name override (default: from config)")
+	askCmd.Flags().IntVar(&flagOllamaTimeout, "ollama-timeout", 0, "LLM request timeout in seconds (default: from config or 30)")
+
+	root.AddCommand(askCmd)
 
 	if err := root.Execute(); err != nil {
 		os.Exit(2)
@@ -318,33 +358,125 @@ func buildConfig(cmd *cobra.Command) *config.Config {
 		}
 	}
 
-	// Re-apply CLI flags that the user explicitly set (they override YAML)
-	if cmd.Flags().Changed("host") {
+	// Re-apply CLI flags that the user explicitly set (they override YAML).
+	// flagChanged checks both local and inherited (persistent) flags so this
+	// works correctly whether called from the root command or a subcommand.
+	if flagChanged(cmd, "host") {
 		cfg.Host = flagHost
 	}
-	if cmd.Flags().Changed("port") {
+	if flagChanged(cmd, "port") {
 		cfg.Port = flagPort
 	}
-	if cmd.Flags().Changed("dbname") {
+	if flagChanged(cmd, "dbname") {
 		cfg.DBName = flagDBName
 	}
-	if cmd.Flags().Changed("user") {
+	if flagChanged(cmd, "user") {
 		cfg.User = flagUser
 	}
-	if cmd.Flags().Changed("password") {
+	if flagChanged(cmd, "password") {
 		cfg.Password = flagPassword
 	}
-	if cmd.Flags().Changed("mode") {
+	if flagChanged(cmd, "mode") {
 		cfg.Mode = flagMode
 	}
-	if cmd.Flags().Changed("output") {
+	if flagChanged(cmd, "output") {
 		cfg.Output = flagOutput
 	}
-	if cmd.Flags().Changed("nodes") {
+	if flagChanged(cmd, "nodes") {
 		cfg.ClusterNodes = strings.Split(strings.TrimSpace(flagNodes), ",")
 	}
 
 	return cfg
+}
+
+// flagChanged reports whether a flag (local or inherited persistent) was
+// explicitly set by the user on the given command.
+func flagChanged(cmd *cobra.Command, name string) bool {
+	if f := cmd.Flags().Lookup(name); f != nil && f.Changed {
+		return true
+	}
+	if f := cmd.Root().PersistentFlags().Lookup(name); f != nil && f.Changed {
+		return true
+	}
+	return false
+}
+
+// runAsk is the RunE handler for the `ask` subcommand.
+func runAsk(cmd *cobra.Command, args []string) error {
+	query := args[0]
+	cfg := buildConfig(cmd)
+
+	// Override LLM settings if explicitly passed on the command line.
+	if flagChanged(cmd, "provider") {
+		cfg.LLMProvider = flagLLMProvider
+	}
+	if flagChanged(cmd, "api-key") {
+		cfg.LLMAPIKey = flagAPIKey
+	}
+	if flagChanged(cmd, "ollama-host") {
+		cfg.OllamaHost = flagOllamaHost
+	}
+	if flagChanged(cmd, "ollama-model") {
+		cfg.OllamaModel = flagOllamaModel
+	}
+	if flagChanged(cmd, "ollama-timeout") {
+		cfg.OllamaTimeoutSeconds = flagOllamaTimeout
+	}
+
+	fmt.Fprintf(os.Stderr, "Analyzing query (provider: %s)...\n", cfg.LLMProvider)
+
+	result, err := nlp.MapQuery(query, cfg)
+	if err != nil {
+		return err
+	}
+
+	switch result.Source {
+	case nlp.SourceLLM:
+		fmt.Fprintf(os.Stderr, "Provider: %s\n", result.ProviderName)
+	default:
+		fmt.Fprintf(os.Stderr, "Note: LLM unavailable — using keyword matching\n")
+	}
+
+	// Build human-readable group list for the status line.
+	var groupLabels []string
+	for _, id := range result.Groups {
+		groupLabels = append(groupLabels, fmt.Sprintf("%s (%s)", id, nlp.GroupName(id)))
+	}
+	fmt.Fprintf(os.Stderr, "Matched groups: %s\n\n", strings.Join(groupLabels, ", "))
+
+	// Inject matched groups and run the standard health-check pipeline.
+	cfg.Groups = result.Groups
+
+	if err := validateGroups(cfg.Groups, cmd); err != nil {
+		return err
+	}
+
+	checkers := selectCheckers(cfg.Groups)
+
+	var (
+		allFindings []checks.Finding
+		pgVersion   string
+		hostname    string
+	)
+
+	switch cfg.Mode {
+	case "cluster":
+		allFindings, pgVersion, hostname = runCluster(cfg, checkers)
+	default:
+		allFindings, pgVersion, hostname = runSingle(cfg, checkers)
+	}
+
+	switch cfg.Output {
+	case "json":
+		if err := report.PrintJSON(allFindings, pgVersion, hostname, cfg.Mode, os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "json error: %v\n", err)
+		}
+	default:
+		report.PrintText(allFindings, pgVersion, hostname, cfg.Mode, cfg.Verbose, cfg.NoColor)
+	}
+
+	os.Exit(report.ExitCode(allFindings))
+	return nil
 }
 
 // validateGroups checks that every requested group ID actually exists.
@@ -374,11 +506,12 @@ func validateGroups(groups []string, cmd *cobra.Command) error {
 			ids = append(ids, c.GroupID())
 		}
 		ids = append(ids, "G12")
+		root := cmd.Root()
 		return fmt.Errorf(
 			"unknown group ID(s): %s\nValid groups: %s\nRun '%s --help' to see all flags",
 			strings.Join(unknown, ", "),
 			strings.Join(ids, ", "),
-			cmd.CommandPath(),
+			root.CommandPath(),
 		)
 	}
 	return nil
