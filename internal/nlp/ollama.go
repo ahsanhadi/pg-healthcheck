@@ -51,7 +51,7 @@ func QueryOllama(host, model, prompt string, timeout time.Duration) (string, err
 		return "", fmt.Errorf("marshalling request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, //nolint:gosec // nosemgrep -- host is a config-controlled Ollama endpoint, never user input
 		host+"/api/generate", bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("building request: %w", err)

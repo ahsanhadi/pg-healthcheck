@@ -13,7 +13,7 @@ import (
 // network failures and non-200 status codes (with up to 200 bytes of the
 // error body appended for diagnostics).
 func doJSONPost(ctx context.Context, url string, body []byte, headers map[string]string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body)) //nolint:gosec // nosemgrep -- url is always a provider-controlled endpoint, never user input
 	if err != nil {
 		return nil, fmt.Errorf("building request: %w", err)
 	}
