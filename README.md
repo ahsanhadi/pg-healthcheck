@@ -247,6 +247,282 @@ PGPASSWORD=secret ./pg-healthcheck --host db1 --dbname prod --user postgres
 
 ---
 
+## Natural Language Interface — `ask`
+
+The `ask` subcommand lets you describe what you want to check in plain English.
+It maps your query to the right check group(s) and runs only those.
+
+```bash
+pg-healthcheck ask "check for TOAST table corruption" --host db1 --dbname mydb
+pg-healthcheck ask "how is WAL disk usage?" --host db1 --output json
+pg-healthcheck ask "are there any lock contention issues?" --verbose
+```
+
+Under the hood `ask` uses an LLM to understand your query.
+Three providers are supported:
+
+| Provider | When to use |
+|---|---|
+| `ollama` | Default. Local model, no internet, no API key — ideal for air-gapped servers |
+| `openai` | OpenAI GPT-4o / GPT-4o-mini, or any OpenAI-compatible endpoint (Azure, Groq, Together AI, …) |
+| `gemini` | Google Gemini — fastest and cheapest cloud option for this task |
+
+If the LLM provider is unreachable or no API key is found, `ask` falls back to
+built-in keyword matching automatically — no error, no crash.
+
+---
+
+### Provider 1 — Ollama (air-gapped, no API key)
+
+[Ollama](https://ollama.com) runs models locally. Nothing leaves your machine.
+
+**Install Ollama and pull a model:**
+
+```bash
+# Install (Linux)
+curl -fsSL https://ollama.com/install.sh | sh
+
+# macOS
+brew install ollama
+
+# Pull a model — llama3.2 is small (2 GB) and works well
+ollama pull llama3.2
+
+# Or use a larger model for better accuracy
+ollama pull mistral
+ollama pull llama3.1:8b
+```
+
+**Run `ask` — Ollama is the default, no flags needed:**
+
+```bash
+pg-healthcheck ask "check for dead tuples and bloat" --host db1 --dbname mydb
+```
+
+**Specify a different local model:**
+
+```bash
+pg-healthcheck ask "WAL disk usage?" --ollama-model mistral --host db1
+```
+
+**Custom Ollama host (remote server or different port):**
+
+```bash
+pg-healthcheck ask "any replication lag?" --ollama-host http://10.0.0.50:11434 --host db1
+```
+
+**Set Ollama as default in `healthcheck.yaml`:**
+
+```yaml
+llm_provider:   ollama
+ollama_host:    http://localhost:11434
+ollama_model:   llama3.2
+```
+
+---
+
+### Provider 2 — OpenAI (GPT-4o, GPT-4o-mini)
+
+Requires an API key from [platform.openai.com](https://platform.openai.com).
+
+**Pass the key on the command line:**
+
+```bash
+pg-healthcheck ask "check index health" \
+  --provider openai \
+  --api-key sk-proj-... \
+  --host db1 --dbname mydb
+```
+
+**Pass the key via environment variable (recommended — keeps it out of shell history):**
+
+```bash
+export OPENAI_API_KEY=sk-proj-...
+pg-healthcheck ask "any security issues?" --provider openai --host db1
+```
+
+**Set OpenAI as default in `healthcheck.yaml`:**
+
+```yaml
+llm_provider: openai
+llm_api_key:  ""               # leave empty and use OPENAI_API_KEY env var
+ollama_model: gpt-4o-mini      # or gpt-4o, gpt-4-turbo, etc.
+```
+
+**OpenAI-compatible endpoints (Azure OpenAI, Groq, Together AI, Anyscale, …):**
+
+These APIs use the same request format as OpenAI. Point `--ollama-host` at the
+base URL of the compatible endpoint:
+
+```bash
+# Groq (free tier, fast)
+export OPENAI_API_KEY=gsk_...
+pg-healthcheck ask "check vacuum health" \
+  --provider openai \
+  --ollama-host https://api.groq.com/openai \
+  --ollama-model llama-3.3-70b-versatile \
+  --host db1
+
+# Azure OpenAI
+pg-healthcheck ask "security audit" \
+  --provider openai \
+  --ollama-host https://mycompany.openai.azure.com \
+  --api-key <azure-key> \
+  --host db1
+```
+
+---
+
+### Provider 3 — Google Gemini
+
+Requires an API key from [Google AI Studio](https://aistudio.google.com/apikey) — free tier available.
+
+**Pass the key on the command line:**
+
+```bash
+pg-healthcheck ask "check for TOAST corruption" \
+  --provider gemini \
+  --api-key AIza... \
+  --host db1 --dbname mydb
+```
+
+**Pass the key via environment variable:**
+
+```bash
+export GEMINI_API_KEY=AIza...
+pg-healthcheck ask "WAL growth rate?" --provider gemini --host db1
+```
+
+**Set Gemini as default in `healthcheck.yaml`:**
+
+```yaml
+llm_provider: gemini
+llm_api_key:  ""              # leave empty and use GEMINI_API_KEY env var
+ollama_model: gemini-2.0-flash   # or gemini-2.5-flash, gemini-2.5-pro, etc.
+```
+
+**Available Gemini models** (run `ollama pull` is not needed — they're cloud models):
+
+| Model | Notes |
+|---|---|
+| `gemini-2.0-flash` | Default. Fast, cheap, accurate for this task |
+| `gemini-2.5-flash` | Latest flash, slightly better reasoning |
+| `gemini-2.5-pro` | Highest accuracy, higher cost |
+
+---
+
+### How the query mapping works
+
+```
+Your query: "check for TOAST table corruption and data checksum issues"
+                              │
+                    ┌─────────▼──────────┐
+                    │   LLM Provider     │  ← Ollama / OpenAI / Gemini
+                    │  (or keyword match)│
+                    └─────────┬──────────┘
+                              │  Returns: "G07"
+                    ┌─────────▼──────────┐
+                    │  selectCheckers()  │  ← same as --groups G07
+                    └─────────┬──────────┘
+                              │
+                    ┌─────────▼──────────┐
+                    │   G07 checks run   │  ← normal health-check output
+                    └────────────────────┘
+```
+
+The LLM is shown a list of all 15 check groups with their scope and asked to return
+matching group IDs (`G07`, `G14`, …). The response is parsed with a regex — the tool
+is not affected by the LLM adding explanations or punctuation.
+
+**Fallback chain:**
+
+```
+1. Configured LLM provider    ← tried first
+2. Built-in keyword matching  ← used automatically if LLM fails or key is missing
+```
+
+The status line tells you which was used:
+
+```
+Analyzing query (provider: gemini)...
+Provider: gemini/gemini-2.0-flash          ← LLM was used
+Matched groups: G07 (TOAST & Corruption)
+
+# or:
+
+Note: LLM unavailable — using keyword matching   ← fallback
+Matched groups: G07 (TOAST & Corruption)
+```
+
+---
+
+### What queries work well
+
+The LLM understands natural language so you are not limited to exact keywords.
+These all work:
+
+```bash
+ask "is the database healthy?"
+ask "check everything related to WAL"
+ask "do we have any bloat or dead row issues?"
+ask "are there slow queries or missing indexes?"
+ask "how safe are we from transaction ID wraparound?"
+ask "is replication keeping up?"
+ask "check all security-related settings"
+ask "what about upgrade readiness for PostgreSQL 17?"
+ask "run the OS resource checks"
+```
+
+**Multi-group queries** — the LLM returns multiple groups when appropriate:
+
+```bash
+ask "check WAL health and replication lag"
+# → G09 (WAL & Replication Slots), G14 (WAL Growth), G15 (Replication Health)
+
+ask "check for corruption, bloat, and index issues"
+# → G05 (Vacuum & Bloat), G06 (Indexes), G07 (TOAST & Corruption)
+```
+
+---
+
+### `ask` flags reference
+
+| Flag | Default | Description |
+|---|---|---|
+| `--provider` | `ollama` | LLM backend: `ollama`, `openai`, or `gemini` |
+| `--api-key` | | API key for cloud providers (or use `OPENAI_API_KEY` / `GEMINI_API_KEY`) |
+| `--ollama-host` | `http://localhost:11434` | Ollama URL or OpenAI-compatible base URL |
+| `--ollama-model` | `llama3.2` | Model name (auto-defaults to `gpt-4o-mini` / `gemini-2.0-flash` for cloud) |
+| `--ollama-timeout` | `30` | LLM request timeout in seconds before falling back to keyword matching |
+
+All standard connection flags (`--host`, `--port`, `--dbname`, `--user`, `--password`,
+`--output`, `--verbose`, `--no-color`, `--mode`, etc.) work with `ask` exactly as they
+do with the main command.
+
+---
+
+### `healthcheck.yaml` — NLP configuration
+
+```yaml
+# ── Natural Language Interface (ask subcommand) ───────────────────────────────
+#
+# Provider options:
+#   ollama  — local Ollama server (air-gapped, no API key needed)
+#   openai  — OpenAI or any OpenAI-compatible API (Azure, Groq, etc.)
+#   gemini  — Google Gemini
+#
+# If the provider fails or no key is found, keyword matching is used automatically.
+
+llm_provider:  ollama         # ollama | openai | gemini
+llm_api_key:   ""             # leave empty to read from OPENAI_API_KEY or GEMINI_API_KEY
+
+ollama_host:   http://localhost:11434   # Ollama URL (also used as OpenAI base URL)
+ollama_model:  llama3.2                 # auto-defaults to gpt-4o-mini / gemini-2.0-flash for cloud
+ollama_timeout_seconds: 30              # seconds before falling back to keyword matching
+```
+
+---
+
 ## All Flags
 
 | Flag | Default | Description |
@@ -265,6 +541,16 @@ PGPASSWORD=secret ./pg-healthcheck --host db1 --dbname prod --user postgres
 | `--backrest-config` | | Path to `pgbackrest.conf` |
 | `--no-color` | false | Disable terminal colour |
 | `--verbose` | false | Show OK findings (hidden by default) |
+
+**`ask` subcommand flags** (all standard flags above also apply):
+
+| Flag | Default | Description |
+|---|---|---|
+| `--provider` | `ollama` | LLM backend: `ollama`, `openai`, or `gemini` |
+| `--api-key` | | API key for cloud providers (or `OPENAI_API_KEY` / `GEMINI_API_KEY` env) |
+| `--ollama-host` | `http://localhost:11434` | Ollama URL or OpenAI-compatible base URL |
+| `--ollama-model` | `llama3.2` | Model name (auto-defaults for cloud providers) |
+| `--ollama-timeout` | `30` | LLM timeout in seconds before keyword fallback |
 
 ---
 
@@ -644,7 +930,7 @@ Use in scripts and CI:
 pg-healthcheck/
 │
 ├── cmd/pg-healthcheck/
-│   └── main.go                  CLI entry point — flags, orchestration
+│   └── main.go                  CLI entry point — flags, orchestration, ask subcommand
 │
 ├── internal/
 │   ├── config/
@@ -655,6 +941,15 @@ pg-healthcheck/
 │   │
 │   ├── severity/
 │   │   └── severity.go          OK / INFO / WARN / CRITICAL type
+│   │
+│   ├── nlp/                     Natural language → check group mapping
+│   │   ├── provider.go          Provider interface + NewProvider() factory
+│   │   ├── ollama.go            Ollama /api/generate client
+│   │   ├── openai.go            OpenAI chat completions client
+│   │   ├── gemini.go            Google Gemini generateContent client
+│   │   ├── keywords.go          Keyword-to-group fallback mapping
+│   │   ├── mapper.go            MapQuery() — tries LLM, falls back to keywords
+│   │   └── mapper_test.go       Unit tests (mock servers for all three providers)
 │   │
 │   ├── checks/
 │   │   ├── checker.go           Finding struct + Checker interface

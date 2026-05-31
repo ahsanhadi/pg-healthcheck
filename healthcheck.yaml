@@ -79,3 +79,19 @@ wal_rate_state_file:            /tmp/pg-healthcheck_wal_rate.json
 
 # ── Per-check timeout ─────────────────────────────────────────
 check_timeout_seconds: 10
+
+# ── Natural Language Interface (ask subcommand) ───────────────
+# The `ask` subcommand maps plain-English queries to check groups.
+# It uses a local Ollama LLM server (air-gapped friendly).
+# If Ollama is unreachable, keyword matching is used automatically.
+#
+# Usage:
+#   pg-healthcheck ask "check for TOAST table corruption" --host db1
+#   pg-healthcheck ask "how is WAL disk usage?" --output json
+#
+llm_provider:            ollama        # ollama (air-gapped) | openai | gemini
+llm_api_key:             ""            # cloud API key; prefer OPENAI_API_KEY or GEMINI_API_KEY env vars
+
+ollama_host:             http://localhost:11434   # Ollama URL (also used as OpenAI-compatible base URL)
+ollama_model:            llama3.2                 # model name (auto-defaults to gpt-4o-mini / gemini-1.5-flash for cloud)
+ollama_timeout_seconds:  30                       # LLM request timeout; fallback to keyword matching on expiry

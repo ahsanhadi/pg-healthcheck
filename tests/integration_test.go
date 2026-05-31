@@ -57,6 +57,37 @@ type report struct {
 	Checks []checkResult `json:"checks"`
 }
 
+// runBinary resolves the binary, executes it with args from the repo root, parses
+// JSON output, and returns a check-ID-keyed results map. Shared by runHealthcheck
+// and runAsk to avoid duplicating binary resolution and JSON parsing.
+func runBinary(t *testing.T, args []string) map[string]checkResult {
+	t.Helper()
+	// Go test changes CWD to the package directory (tests/) before running,
+	// so binary paths like "./pg-healthcheck" are relative to tests/ — not the
+	// repo root where the binary is actually built.  Resolve from ".." (repo root)
+	// before absolutising so we find the real binary.
+	binPath, err := filepath.Abs(filepath.Join("..", *binary))
+	if err != nil {
+		t.Fatalf("failed to resolve binary path %q: %v", *binary, err)
+	}
+	cmd := exec.Command(binPath, args...) //nolint:gosec // nosemgrep -- test binary path resolved via filepath.Abs from repo root; args are controlled test flags
+	// Run from repo root so default ./healthcheck.yaml is picked up.
+	// Running from tests/ leaves cfg.CheckTimeout at zero (no YAML load),
+	// causing near-immediate context deadline exceeded in many checks.
+	cmd.Dir = ".."
+	out, _ := cmd.Output() // non-zero exit is expected when there are WARNs/CRITs
+
+	var r report
+	if err := json.Unmarshal(out, &r); err != nil {
+		t.Fatalf("failed to parse binary output: %v\nraw: %s", err, string(out))
+	}
+	results := make(map[string]checkResult, len(r.Checks))
+	for _, c := range r.Checks {
+		results[c.CheckID] = c
+	}
+	return results
+}
+
 // runHealthcheck executes the binary and returns parsed findings.
 func runHealthcheck(t *testing.T, extraArgs ...string) map[string]checkResult {
 	t.Helper()
@@ -72,32 +103,7 @@ func runHealthcheck(t *testing.T, extraArgs ...string) map[string]checkResult {
 		args = append(args, "--password", *pgPass)
 	}
 	args = append(args, extraArgs...)
-
-	// Go test changes CWD to the package directory (tests/) before running,
-	// so binary paths like "./pg-healthcheck" are relative to tests/ — not the
-	// repo root where the binary is actually built.  Resolve from ".." (repo root)
-	// before absolutising so we find the real binary.
-	binPath, err := filepath.Abs(filepath.Join("..", *binary))
-	if err != nil {
-		t.Fatalf("failed to resolve binary path %q: %v", *binary, err)
-	}
-	cmd := exec.Command(binPath, args...)
-	// Run from repo root so default ./healthcheck.yaml is picked up.
-	// Running from tests/ leaves cfg.CheckTimeout at zero (no YAML load),
-	// causing near-immediate context deadline exceeded in many checks.
-	cmd.Dir = ".."
-	out, _ := cmd.Output() // non-zero exit is expected when there are WARNs/CRITs
-
-	var r report
-	if err := json.Unmarshal(out, &r); err != nil {
-		t.Fatalf("failed to parse healthcheck output: %v\nraw: %s", err, string(out))
-	}
-
-	results := make(map[string]checkResult, len(r.Checks))
-	for _, c := range r.Checks {
-		results[c.CheckID] = c
-	}
-	return results
+	return runBinary(t, args)
 }
 
 // db opens a direct connection for injecting/cleaning test conditions.
@@ -118,7 +124,7 @@ func db(t *testing.T) *pgxpool.Pool {
 // exec runs a SQL statement and fails the test on error.
 func mustExec(t *testing.T, pool *pgxpool.Pool, sql string, args ...any) {
 	t.Helper()
-	if _, err := pool.Exec(context.Background(), sql, args...); err != nil {
+	if _, err := pool.Exec(context.Background(), sql, args...); err != nil { //nolint:gosec // nosemgrep -- callers always pass hardcoded SQL literals; args are parameterised query placeholders
 		t.Fatalf("SQL failed: %v\nSQL: %s", err, sql)
 	}
 }
@@ -148,17 +154,18 @@ func teardown(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	ctx := context.Background()
 	// Roll back any dangling prepared transaction
-	pool.Exec(ctx, `ROLLBACK PREPARED '_hc_test_prepared_tx'`)
+	pool.Exec(ctx, `ROLLBACK PREPARED '_hc_test_prepared_tx'`) //nolint:gosec // nosemgrep
 	// Drop inactive replication slot
-	pool.Exec(ctx, `SELECT pg_drop_replication_slot('_hc_test_inactive_slot')
-	                WHERE EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name='_hc_test_inactive_slot')`)
+	pool.Exec(ctx, //nolint:gosec // nosemgrep
+		`SELECT pg_drop_replication_slot('_hc_test_inactive_slot')
+		                WHERE EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name='_hc_test_inactive_slot')`)
 	// Drop test superuser
-	pool.Exec(ctx, `DROP ROLE IF EXISTS _hc_test_super`)
+	pool.Exec(ctx, `DROP ROLE IF EXISTS _hc_test_super`) //nolint:gosec // nosemgrep
 	// Drop lock-diagnostic test roles
-	pool.Exec(ctx, `DROP ROLE IF EXISTS _hc_test_blocker`)
-	pool.Exec(ctx, `DROP ROLE IF EXISTS _hc_test_waiter`)
+	pool.Exec(ctx, `DROP ROLE IF EXISTS _hc_test_blocker`) //nolint:gosec // nosemgrep
+	pool.Exec(ctx, `DROP ROLE IF EXISTS _hc_test_waiter`) //nolint:gosec // nosemgrep
 	// Revoke public schema create
-	pool.Exec(ctx, `REVOKE CREATE ON SCHEMA public FROM PUBLIC`)
+	pool.Exec(ctx, `REVOKE CREATE ON SCHEMA public FROM PUBLIC`) //nolint:gosec // nosemgrep
 	// Drop all test objects
 	mustExec(t, pool, `DROP SCHEMA IF EXISTS _hc_test CASCADE`)
 }
@@ -179,7 +186,17 @@ func TestG05_DeadTuples(t *testing.T) {
 	mustExec(t, pool, `INSERT INTO _hc_test.bloat(data) SELECT repeat('x',200) FROM generate_series(1,60000)`)
 	mustExec(t, pool, `DELETE FROM _hc_test.bloat WHERE id % 5 != 0`)
 	// Flush stats so pg_stat_user_tables reflects the new dead-tuple counts immediately.
-	mustExec(t, pool, `SELECT pg_stat_force_next_flush()`)
+	// pg_stat_force_next_flush() was added in PG 15; on older versions we clear the
+	// cached snapshot and sleep briefly so the stats collector can catch up.
+	mustExec(t, pool, `DO $$
+BEGIN
+  IF current_setting('server_version_num')::int >= 150000 THEN
+    PERFORM pg_stat_force_next_flush();
+  ELSE
+    PERFORM pg_sleep(0.5);
+    PERFORM pg_stat_clear_snapshot();
+  END IF;
+END$$`)
 	// do NOT vacuum — leave dead tuples in place
 
 	results := runHealthcheck(t, "--groups", "G05")
@@ -211,10 +228,10 @@ func TestG05_PreparedTransactions(t *testing.T) {
 	}
 	defer conn.Release()
 	ctx := context.Background()
-	conn.Exec(ctx, `ROLLBACK PREPARED '_hc_test_prepared_tx'`) // clean prior run
-	conn.Exec(ctx, `BEGIN`)
-	conn.Exec(ctx, `CREATE TABLE IF NOT EXISTS _hc_test.pt_marker(id int)`)
-	if _, err := conn.Exec(ctx, `PREPARE TRANSACTION '_hc_test_prepared_tx'`); err != nil {
+	conn.Exec(ctx, `ROLLBACK PREPARED '_hc_test_prepared_tx'`) //nolint:gosec // nosemgrep -- clean prior run, static SQL
+	conn.Exec(ctx, `BEGIN`)                                    //nolint:gosec // nosemgrep
+	conn.Exec(ctx, `CREATE TABLE IF NOT EXISTS _hc_test.pt_marker(id int)`) //nolint:gosec // nosemgrep
+	if _, err := conn.Exec(ctx, `PREPARE TRANSACTION '_hc_test_prepared_tx'`); err != nil { //nolint:gosec // nosemgrep
 		t.Skipf("PREPARE TRANSACTION not allowed (max_prepared_transactions=0?): %v", err)
 	}
 
@@ -290,10 +307,10 @@ func TestG09_InactiveSlot(t *testing.T) {
 	setupSchema(t, pool)
 	defer teardown(t, pool)
 
-	ctx := context.Background()
-	pool.Exec(ctx, `SELECT pg_drop_replication_slot('_hc_test_inactive_slot')
-	                WHERE EXISTS(SELECT 1 FROM pg_replication_slots
-	                             WHERE slot_name='_hc_test_inactive_slot')`)
+	pool.Exec(context.Background(), //nolint:gosec // nosemgrep
+		`SELECT pg_drop_replication_slot('_hc_test_inactive_slot')
+		                WHERE EXISTS(SELECT 1 FROM pg_replication_slots
+		                             WHERE slot_name='_hc_test_inactive_slot')`)
 	mustExec(t, pool, `SELECT pg_create_physical_replication_slot('_hc_test_inactive_slot', false, false)`)
 
 	// Generate some WAL so the slot falls behind
@@ -340,7 +357,7 @@ func TestG11_ExtraSuperuser(t *testing.T) {
 	defer teardown(t, pool)
 
 	ctx := context.Background()
-	pool.Exec(ctx, `DROP ROLE IF EXISTS _hc_test_super`)
+	pool.Exec(ctx, `DROP ROLE IF EXISTS _hc_test_super`) //nolint:gosec // nosemgrep
 	mustExec(t, pool, `CREATE ROLE _hc_test_super SUPERUSER LOGIN PASSWORD 'testonly123!'`)
 
 	results := runHealthcheck(t, "--groups", "G11")
@@ -460,10 +477,10 @@ func TestG04_LockRoleAppDiagnostics(t *testing.T) {
 		t.Fatalf("acquire blocker conn: %v", err)
 	}
 	defer blockerConn.Release()
-	if _, err := blockerConn.Exec(ctx, `BEGIN`); err != nil {
+	if _, err := blockerConn.Exec(ctx, `BEGIN`); err != nil { //nolint:gosec // nosemgrep
 		t.Fatalf("blocker BEGIN failed: %v", err)
 	}
-	if _, err := blockerConn.Exec(ctx, `LOCK TABLE _hc_test.lock_diag IN ACCESS EXCLUSIVE MODE`); err != nil {
+	if _, err := blockerConn.Exec(ctx, `LOCK TABLE _hc_test.lock_diag IN ACCESS EXCLUSIVE MODE`); err != nil { //nolint:gosec // nosemgrep
 		t.Fatalf("blocker LOCK failed: %v", err)
 	}
 
@@ -478,14 +495,14 @@ func TestG04_LockRoleAppDiagnostics(t *testing.T) {
 			return
 		}
 		defer waiterConn.Release()
-		_, err = waiterConn.Exec(ctx, `BEGIN`)
+		_, err = waiterConn.Exec(ctx, `BEGIN`) //nolint:gosec // nosemgrep
 		if err != nil {
 			waiterDone <- err
 			return
 		}
-		_, err = waiterConn.Exec(ctx, `LOCK TABLE _hc_test.lock_diag IN ACCESS SHARE MODE`)
+		_, err = waiterConn.Exec(ctx, `LOCK TABLE _hc_test.lock_diag IN ACCESS SHARE MODE`) //nolint:gosec // nosemgrep
 		if err == nil {
-			_, _ = waiterConn.Exec(ctx, `ROLLBACK`)
+			_, _ = waiterConn.Exec(ctx, `ROLLBACK`) //nolint:gosec // nosemgrep
 		}
 		waiterDone <- err
 	}()
@@ -493,8 +510,8 @@ func TestG04_LockRoleAppDiagnostics(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		var waiting int
-		if err := pool.QueryRow(context.Background(), `
-			SELECT count(*) FROM pg_stat_activity
+		if err := pool.QueryRow(context.Background(), //nolint:gosec // nosemgrep
+			`SELECT count(*) FROM pg_stat_activity
 			WHERE usename = '_hc_test_waiter'
 			  AND wait_event_type = 'Lock'`).Scan(&waiting); err != nil {
 			t.Fatalf("lock wait probe failed: %v", err)
@@ -513,8 +530,8 @@ func TestG04_LockRoleAppDiagnostics(t *testing.T) {
 	for attempt := 1; attempt <= 5; attempt++ {
 		// Ensure the waiter is still blocked right before invoking healthcheck.
 		var blockedNow int
-		if err := pool.QueryRow(context.Background(), `
-			SELECT count(*)
+		if err := pool.QueryRow(context.Background(), //nolint:gosec // nosemgrep
+			`SELECT count(*)
 			FROM pg_stat_activity
 			WHERE usename = '_hc_test_waiter'
 			  AND wait_event_type = 'Lock'
@@ -562,7 +579,7 @@ func TestG04_LockRoleAppDiagnostics(t *testing.T) {
 	}
 
 	// Unblock and clean up waiter transaction.
-	if _, err := blockerConn.Exec(ctx, `ROLLBACK`); err != nil {
+	if _, err := blockerConn.Exec(ctx, `ROLLBACK`); err != nil { //nolint:gosec // nosemgrep
 		t.Fatalf("blocker ROLLBACK failed: %v", err)
 	}
 	if err := <-waiterDone; err != nil {
@@ -606,7 +623,7 @@ func TestG07_TOASTCorruption(t *testing.T) {
 
 	// Verify the table actually got a TOAST table before we corrupt it.
 	var toastOID uint32
-	err := pool.QueryRow(context.Background(),
+	err := pool.QueryRow(context.Background(), //nolint:gosec // nosemgrep
 		`SELECT reltoastrelid FROM pg_class WHERE oid = '_hc_test.toast_corrupt'::regclass`).Scan(&toastOID)
 	if err != nil || toastOID == 0 {
 		t.Skipf("table has no TOAST table (toastOID=%d, err=%v) — skipping", toastOID, err)
@@ -645,6 +662,135 @@ func TestG07_TOASTCorruption(t *testing.T) {
 		`UPDATE pg_class SET reltoastrelid = $1 WHERE oid = '_hc_test.toast_corrupt'::regclass`, toastOID)
 }
 
+// runAsk executes the binary's `ask` subcommand and returns parsed findings.
+// It uses --ollama-timeout 1 so the test never actually waits for Ollama —
+// the timeout forces keyword-fallback mode immediately.
+func runAsk(t *testing.T, query string, extraArgs ...string) map[string]checkResult {
+	t.Helper()
+	args := []string{
+		"ask", query,
+		"--host", *pgHost,
+		"--port", fmt.Sprintf("%d", *pgPort),
+		"--dbname", *pgDBName,
+		"--user", *pgUser,
+		"--output", "json",
+		"--verbose",
+		"--ollama-host", "http://127.0.0.1:19999", // guaranteed unreachable → keyword fallback
+		"--ollama-timeout", "1",
+	}
+	if *pgPass != "" {
+		args = append(args, "--password", *pgPass)
+	}
+	args = append(args, extraArgs...)
+	return runBinary(t, args)
+}
+
+// TestAsk_ToastKeyword verifies that asking about TOAST corruption runs G07 checks.
+func TestAsk_ToastKeyword(t *testing.T) {
+	results := runAsk(t, "check for TOAST table corruption")
+	// G07-001 (data checksums) should always appear when G07 runs.
+	if _, ok := results["G07-001"]; !ok {
+		t.Error("G07-001 not found — G07 group was not run by the ask subcommand")
+	}
+	t.Logf("ask 'TOAST corruption' correctly ran G07 (%d findings)", len(results))
+}
+
+// TestAsk_WALDisk verifies that asking about WAL disk size runs G14 (and/or G09).
+func TestAsk_WALDisk(t *testing.T) {
+	results := runAsk(t, "check WAL disk size")
+	// G14-001 is the WAL directory size check — always present when G14 runs.
+	if _, ok := results["G14-001"]; !ok {
+		// G09 slot checks are also WAL-related; accept either group.
+		if _, ok2 := results["G09-001"]; !ok2 {
+			t.Error("neither G14-001 nor G09-001 found — ask did not map 'WAL disk size' to a WAL group")
+		}
+	}
+	t.Logf("ask 'WAL disk size' correctly ran WAL group(s) (%d findings)", len(results))
+}
+
+// TestAsk_LockContention verifies that asking about locks runs G04.
+func TestAsk_LockContention(t *testing.T) {
+	results := runAsk(t, "are there any lock contention issues or deadlocks?")
+	if _, ok := results["G04-003"]; !ok {
+		t.Error("G04-003 not found — G04 was not run by the ask subcommand for a locks query")
+	}
+	t.Logf("ask 'lock contention' correctly ran G04 (%d findings)", len(results))
+}
+
+// TestAsk_Security verifies that asking about security runs G11.
+func TestAsk_Security(t *testing.T) {
+	results := runAsk(t, "check superuser count and schema permissions")
+	found := false
+	for id := range results {
+		if strings.HasPrefix(id, "G11-") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("no G11 findings — G11 was not run by the ask subcommand for a security query")
+	}
+	t.Logf("ask 'security' correctly ran G11 (%d findings)", len(results))
+}
+
+// TestAsk_Replication verifies that asking about replication lag runs G15 or G09.
+func TestAsk_Replication(t *testing.T) {
+	results := runAsk(t, "check replication lag on standby")
+	foundRepl := false
+	for id := range results {
+		if strings.HasPrefix(id, "G15-") || strings.HasPrefix(id, "G09-") {
+			foundRepl = true
+			break
+		}
+	}
+	if !foundRepl {
+		t.Error("no G15/G09 findings — ask did not map 'replication lag' to a replication group")
+	}
+	t.Logf("ask 'replication lag' correctly ran replication group(s) (%d findings)", len(results))
+}
+
+// TestAsk_VacuumBloat verifies that asking about dead tuples runs G05.
+func TestAsk_VacuumBloat(t *testing.T) {
+	results := runAsk(t, "check for dead tuples and table bloat")
+	found := false
+	for id := range results {
+		if strings.HasPrefix(id, "G05-") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("no G05 findings — G05 was not run by the ask subcommand for a vacuum/bloat query")
+	}
+	t.Logf("ask 'dead tuples' correctly ran G05 (%d findings)", len(results))
+}
+
+// TestAsk_Connection verifies that asking about connection/SSL runs G01.
+func TestAsk_Connection(t *testing.T) {
+	results := runAsk(t, "check SSL certificate expiry and connection saturation")
+	found := false
+	for id := range results {
+		if strings.HasPrefix(id, "G01-") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("no G01 findings — G01 was not run by the ask subcommand for a connection query")
+	}
+	t.Logf("ask 'SSL/connection' correctly ran G01 (%d findings)", len(results))
+}
+
+// TestAsk_JSONOutput verifies that the ask subcommand can output valid JSON.
+func TestAsk_JSONOutput(t *testing.T) {
+	// runAsk already uses --output json; just ensure we get valid structured output.
+	results := runAsk(t, "check for index issues")
+	if len(results) == 0 {
+		t.Error("ask returned no findings in JSON mode")
+	}
+	t.Logf("ask JSON output: %d findings", len(results))
+}
+
 // TestG08_VMHeapMismatch verifies that G08-002 fires WARN when pg_class.relallvisible
 // exceeds relpages — the catalog-level signal for a stale or corrupt visibility map.
 func TestG08_VMHeapMismatch(t *testing.T) {
@@ -660,7 +806,7 @@ func TestG08_VMHeapMismatch(t *testing.T) {
 
 	// Confirm relpages > 0 before we inject the mismatch.
 	var relpages int
-	if err := pool.QueryRow(context.Background(),
+	if err := pool.QueryRow(context.Background(), //nolint:gosec // nosemgrep
 		`SELECT relpages FROM pg_class WHERE oid = '_hc_test.vm_mismatch'::regclass`).Scan(&relpages); err != nil || relpages == 0 {
 		t.Skipf("relpages=%d after VACUUM — cannot inject mismatch (err=%v)", relpages, err)
 	}
